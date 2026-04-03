@@ -1,0 +1,2 @@
+capability net_admin,
+/var/log/unbound/unbound.log rw,

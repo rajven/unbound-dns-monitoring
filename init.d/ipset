@@ -1,0 +1,205 @@
+#!/bin/bash
+### BEGIN INIT INFO
+# Provides:          ipset
+# Required-Start:    $local_fs $network
+# Required-Stop:     $local_fs
+# Default-Start:     2 3 4 5
+# Default-Stop:      0 1 6
+# Short-Description: Atomic restore/swap of ipset from /etc/ipset.d/*.conf
+### END INIT INFO
+
+IPSET='/sbin/ipset'
+IPSET_DIR='/etc/ipset.d'
+[ -x "$IPSET" ] || exit 1
+
+# LSB logging (if not available, define simple ones)
+if [ -r "/lib/lsb/init-functions" ]; then
+    . /lib/lsb/init-functions
+else
+    log_success_msg() { echo "[ OK ] $*"; }
+    log_failure_msg() { echo "[FAIL] $*" >&2; }
+    log_warning_msg() { echo "[WARN] $*" >&2; }
+fi
+
+# Get base set name from .conf file (filename without .conf)
+get_set_name() {
+    local conf="$1"
+    basename "$conf" .conf
+}
+
+# Create temporary file with swapped set name (name -> name_new)
+create_temp_ipset_file() {
+    local name="$1"
+    local conf="$IPSET_DIR/$name.conf"
+    local tmpfile="$IPSET_DIR/$name.ipset"
+
+    # Replace all occurrences of 'name' as a whole word with 'name_new'
+    # This handles lines: "create name hash:ip ..." -> "create name_new hash:ip ..."
+    # and "add name 1.2.3.4 ..." -> "add name_new 1.2.3.4 ..."
+    sed -E "
+        s/^([[:space:]]*)(create|add)[[:space:]]+$name([[:space:]]|$)/\1\2 ${name}_new\3/g;
+        s/^([[:space:]]*)(create|add)[[:space:]]+$name([[:space:]]|$)/\1\2 ${name}_new\3/g
+    " "$conf" > "$tmpfile"
+
+    echo "$tmpfile"
+}
+
+# Load entries into a set from a file (which may be a full ipset save format)
+load_from_file() {
+    local setname="$1"
+    local file="$2"
+    "$IPSET" restore -! < "$file" 2>/dev/null
+}
+
+# Atomically replace live set with new configuration
+replace_atomic() {
+    local name="$1"
+    local conf="$IPSET_DIR/$name.conf"
+    local tmpfile
+
+    # 1. Create temporary ipset file with name_new
+    tmpfile=$(create_temp_ipset_file "$name")
+    if [ ! -s "$tmpfile" ]; then
+        log_failure_msg "Failed to create temporary ipset file for $name"
+        rm -f "$tmpfile"
+        return 1
+    fi
+
+    # 2. Create temporary ipset set (if already exists, destroy it first)
+    if "$IPSET" list "${name}_new" &>/dev/null; then
+        "$IPSET" destroy "${name}_new" 2>/dev/null
+    fi
+    # Extract type from conf to create empty set (necessary before restore)
+    local type=$(sed -n -E 's/^create\s+'"$name"'\s+(\S+).*/\1/p' "$conf" | head -1)
+    if [ -z "$type" ]; then
+        log_failure_msg "Cannot determine type for $name from $conf"
+        rm -f "$tmpfile"
+        return 1
+    fi
+    if ! "$IPSET" create "${name}_new" "$type" comment 2>/dev/null; then
+        log_failure_msg "Cannot create temporary set ${name}_new"
+        rm -f "$tmpfile"
+        return 1
+    fi
+
+    # 3. Load data into temporary set
+    if ! load_from_file "${name}_new" "$tmpfile"; then
+        log_failure_msg "Failed to load data into ${name}_new"
+        "$IPSET" destroy "${name}_new" 2>/dev/null
+        rm -f "$tmpfile"
+        return 1
+    fi
+
+    # 4. Atomic swap
+    if ! "$IPSET" swap "${name}_new" "$name"; then
+        log_failure_msg "Atomic swap failed for $name"
+        "$IPSET" destroy "${name}_new" 2>/dev/null
+        rm -f "$tmpfile"
+        return 1
+    fi
+
+    # 5. Destroy old set (now named _new) and remove temp file
+    "$IPSET" destroy "${name}_new" 2>/dev/null
+    rm -f "$tmpfile"
+    log_success_msg "Atomically replaced ipset $name"
+    return 0
+}
+
+# Simple restore (when set does not exist)
+restore_simple() {
+    local name="$1"
+    local conf="$IPSET_DIR/$name.conf"
+    if "$IPSET" restore -! < "$conf" 2>/dev/null; then
+        log_success_msg "Restored ipset $name from $conf"
+        return 0
+    else
+        log_failure_msg "Failed to restore $name from $conf"
+        return 1
+    fi
+}
+
+start_ipset() {
+    local ret=0
+    for conf in "$IPSET_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        name=$(get_set_name "$conf")
+        [ -z "$name" ] && continue
+
+        if "$IPSET" list "$name" &>/dev/null; then
+            # Set already exists → atomic replace
+            replace_atomic "$name" || ret=1
+        else
+            # Set does not exist → simple restore
+            restore_simple "$name" || ret=1
+        fi
+    done
+    return $ret
+}
+
+stop_ipset() {
+    local ret=0
+    for conf in "$IPSET_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        name=$(get_set_name "$conf")
+        [ -z "$name" ] && continue
+        if "$IPSET" list "$name" &>/dev/null; then
+            "$IPSET" destroy "$name" 2>/dev/null || ret=1
+            log_success_msg "Destroyed $name"
+        fi
+        # Also clean any leftover temporary sets
+        if "$IPSET" list "${name}_new" &>/dev/null; then
+            "$IPSET" destroy "${name}_new" 2>/dev/null
+            log_success_msg "Destroyed leftover ${name}_new"
+        fi
+        # Remove any stray .ipset temp files (if left)
+        rm -f "$IPSET_DIR/$name.ipset"
+    done
+    return $ret
+}
+
+save_ipset() {
+    local ret=0
+    for name in $(ipset list -n); do
+        [ -z "$name" ] && continue
+        conf="$IPSET_DIR/$name"
+        if "$IPSET" save "$name" > "$conf.tmp" 2>/dev/null; then
+                mv "$conf.tmp" "$conf.conf"
+                log_success_msg "Saved $name to $conf.conf"
+            else
+                rm -f "$conf.tmp"
+                log_failure_msg "Failed to save $name"
+                ret=1
+            fi
+    done
+    return $ret
+}
+
+status_ipset() {
+    local ret=0
+    for conf in "$IPSET_DIR"/*.conf; do
+        [ -f "$conf" ] || continue
+        name=$(get_set_name "$conf")
+        [ -z "$name" ] && continue
+        if "$IPSET" list "$name" &>/dev/null; then
+            echo "$name loaded"
+        else
+            echo "$name NOT loaded"
+            ret=1
+        fi
+    done
+    return $ret
+}
+
+case "$1" in
+    start)   start_ipset ;;
+    stop)    stop_ipset ;;
+    restart) stop_ipset; start_ipset ;;
+    reload)  stop_ipset; start_ipset ;;
+    save)    save_ipset ;;
+    status)  status_ipset ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|reload|save|status}"
+        exit 1
+esac
+
+exit $?

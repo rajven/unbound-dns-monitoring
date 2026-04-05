@@ -1,0 +1,2 @@
+#reconfigure youtube ipset for gateway
+*/5 * * * * root /usr/local/bin/save_ipsets.sh 2>/dev/null || true

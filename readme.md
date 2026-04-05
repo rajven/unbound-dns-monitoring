@@ -1,95 +1,46 @@
-# Создание наборов ipset для определния принадлежности к доменам на базе логов unbound
+# unbound-dns-monitor
 
-## Особенности загрузки RU-адресов
-
-- **Два источника**: сначала ipdeny.com (CIDR), затем GeoLite2 (диапазоны IP‑IP) — недостающие адреса добавляются автоматически.
-
-## Требования
-
-- Debian / Ubuntu (или любой systemd-дистрибутив)
+Мониторинг DNS-запросов Unbound для управления ipset наборами.
 
 ## Установка
 
-### 1. Установите необходимые пакеты
-
 ```bash
-apt update
-apt install -y libfile-tail-perl libnet-patricia-perl libnet-dns-perl \
-               ipset unbound wget rsync netfilter-persistent
+git clone https://github.com/rajven/unbound-dns-monitoring
+cd unbound-dns-monitor
+sudo ./install.sh
 ```
 
-> **Примечание**: `netfilter-persistent` — правильное название для Debian/Ubuntu. Если пакет не найден, используйте `iptables-persistent`.
-
-### 2. Подготовьте структуру каталогов и логов
+## Запуск
 
 ```bash
-mkdir -p /var/log/unbound
-touch /var/log/unbound/unbound.log
-chmod 770 /var/log/unbound
-chown unbound:unbound -R /var/log/unbound
+systemctl start unbound
+systemctl start unbound-dns-monitor.service
 ```
-
-### 3. Скопируйте сервисы и скрипты из репозитория
-
-```bash
-cp -f systemd/unbound-dns-monitor.service /etc/systemd/system/
-cp -f init.d/ipset /etc/init.d/ 2>/dev/null || true
-
-mkdir -p /etc/systemd/system/netfilter-persistent.service.d
-cp -f systemd/netfilter-persistent.service.d/override.conf /etc/systemd/system/netfilter-persistent.service.d/
-
-rsync -av unbound/ /etc/unbound/
-
-cp -f apparmor.d/local/usr.sbin.unbound /etc/apparmor.d/local/
-apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound
-
-cp -f ru.sh /usr/local/bin/
-chmod +x /usr/local/bin/ru.sh
-
-cp -f bypass_myip.sh /usr/local/bin/
-chmod +x /usr/local/bin/bypass_myip.sh
-
-cp -f unbound-dns-monitor.pl /usr/local/bin/
-chmod +x /usr/local/bin/unbound-dns-monitor.pl
-```
-
-### 4. Настройка dummy-интерфейса (опционально)
-
-Нужен, если вы хотите, чтобы Unbound слушал на фиксированном локальном IP (например, `10.1.2.1`) независимо от физических интерфейсов.
-
-```bash
-echo dummy > /etc/modules-load.d/dummy.conf
-modprobe dummy
-
-mkdir -p /etc/network/interfaces.d
-cat <<'EOF' > /etc/network/interfaces.d/dummy0
-auto dummy0
-allow-hotplug dummy0
-
-iface dummy0 inet manual
-  pre-up /sbin/ip link add dummy0 type dummy
-  post-up ip addr add 10.1.2.1/32 dev dummy0
-  post-down /sbin/ip link delete dummy0
-EOF
-```
-
-### 5. Генерация ключей для `unbound-control`
-
-```bash
-unbound-control-setup
-```
-
-### 6. Включение сервисов
-
-```bash
-systemctl enable unbound
-systemctl enable unbound-dns-monitor.service
-```
-
-> **Запуск**: после перезагрузки всё поднимется автоматически. Для немедленного старта выполните `systemctl start unbound unbound-dns-monitor.service` вручную.
 
 ## Проверка
 
-- Посмотреть набор ipset: `ipset list RU_IPS | head`
-- Логи Unbound: `journalctl -u unbound -f`
-- Логи мониторинга DNS: `journalctl -u unbound-dns-monitor -f`
+```bash
+# Просмотр ipset наборов
+ipset list RU_IPS | head
+
+# Логи Unbound
+journalctl -u unbound -f
+
+# Логи мониторинга
+journalctl -u unbound-dns-monitor -f
+```
+
+## Конфигурация
+
+Редактируйте `/etc/unbound-dns-monitor/unbound-dns-monitor.cfg`
+
+## Особенности
+
+- Загрузка RU-адресов из ipdeny.com и GeoLite2
+- Автоматическое создание ipset наборов
+- Интеграция с Unbound через DNS-лог
+
+## Требования
+
+Debian/Ubuntu с systemd
+```

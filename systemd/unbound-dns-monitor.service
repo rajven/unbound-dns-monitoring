@@ -8,8 +8,9 @@ Wants=unbound.service
 Type=simple
 User=root
 Group=root
-ExecStartPre=/usr/local/bin/ru.sh
+ExecStartPre=/usr/local/bin/init_ru_ipset.sh
 ExecStartPre=/usr/local/bin/bypass_myip.sh
+ExecStartPre=/usr/bin/truncate -s 0 /var/log/unbound/unbound.log
 ExecStart=/usr/local/bin/unbound-dns-monitor.pl
 ExecReload=/bin/kill -HUP $MAINPID
 ExecStop=/bin/kill -TERM $MAINPID
@@ -21,7 +22,7 @@ SyslogIdentifier=unbound-dns-monitor
 Nice=19
 CPUQuota=20%
 MemoryMax=256M
-TasksMax=4
+TasksMax=512
 ProtectSystem=strict
 ProtectHome=yes
 PrivateTmp=yes
@@ -29,6 +30,7 @@ NoNewPrivileges=yes
 ReadWritePaths=/etc/ipset.d /var/log/unbound
 CapabilityBoundingSet=CAP_NET_ADMIN CAP_NET_RAW CAP_DAC_OVERRIDE
 AmbientCapabilities=CAP_NET_ADMIN CAP_NET_RAW
+LimitNOFILE=65536
 
 [Install]
 WantedBy=multi-user.target

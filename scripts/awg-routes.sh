@@ -65,15 +65,15 @@ fi
 ############ The END direct routes ###################
 
 # policy for OpenVpn
-#ip route $ACTION default via $VPN_GATEWAY table awg 2>/dev/null || true
-#ip rule $ACTION from 10.254.254.1 lookup main pref 100  2>/dev/null || true
-#ip rule $ACTION from 10.254.254.0/24 to 10.254.254.0/24 lookup main pref 101  2>/dev/null || true
+#$IP_CMD route $ACTION default via $VPN_GATEWAY table awg 2>/dev/null || true
+#$IP_CMD rule $ACTION from 10.254.254.1 lookup main pref 100  2>/dev/null || true
+#$IP_CMD rule $ACTION from 10.254.254.0/24 to 10.254.254.0/24 lookup main pref 101  2>/dev/null || true
 # direct nets
-#ip rule $ACTION from 10.254.254.0/24 fwmark 100 table main pref 102 2>/dev/null || true
+#$IP_CMD rule $ACTION from 10.254.254.0/24 fwmark 100 table main pref 102 2>/dev/null || true
 # default to vpn
-#ip rule $ACTION from 10.254.254.0/24 table awg pref 5000 2>/dev/null || true
+#$IP_CMD rule $ACTION from 10.254.254.0/24 table awg pref 5000 2>/dev/null || true
 
-# Удаляем маршрут до шлюза только при down
+# Удаляем маршрут до шлюза при down
 if [[ "$MODE" == "down" ]]; then
     $IP_CMD route del $VPN_GATEWAY/32 dev $VPN_DEV 2>/dev/null || true
     log_info "Removed route to VPN gateway"

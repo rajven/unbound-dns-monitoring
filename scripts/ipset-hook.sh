@@ -31,11 +31,6 @@ if ! echo "$IP_ADDR" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}
     error_exit "Invalid IP address format: $IP_ADDR"
 fi
 
-# Validate ipset name (updated to include youtube)
-if [[ ! "$IPSET_NAME" =~ ^(direct|vpn|youtube)$ ]]; then
-    error_exit "Invalid ipset name: $IPSET_NAME (must be 'direct', 'vpn', or 'youtube')"
-fi
-
 # Load configuration
 source "$CONFIG_FILE"
 

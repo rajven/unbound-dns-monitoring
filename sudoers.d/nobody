@@ -1,0 +1,1 @@
+nobody ALL=(root)      NOPASSWD: /etc/openvpn/server/cmd/show_ipset.sh

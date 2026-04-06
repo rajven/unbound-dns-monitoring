@@ -1,0 +1,79 @@
+#!/bin/bash
+
+#DEBUG="${DEBUG:-false}"
+
+DEBUG="false"
+
+# Функция логирования в syslog
+log() {
+    # Фильтруем DEBUG-сообщения, если отладка не включена
+    if [[ "$1" == "DEBUG:"* ]] && [[ "${DEBUG}" != "true" ]]; then
+        return
+    fi
+    logger -t "openvpn-ccd" -p local0.debug "$@"
+}
+
+# Конвертация CIDR префикса в маску подсети
+cidr_to_mask() {
+    local p=$1
+    # Валидация префикса
+    if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -gt 32 ]; then
+        log "ERROR: Invalid CIDR prefix: '$p'"
+        return 1
+    fi
+
+    local mask=$((0xffffffff << (32 - p) & 0xffffffff))
+    printf "%d.%d.%d.%d" \
+        $((mask >> 24 & 255)) \
+        $((mask >> 16 & 255)) \
+        $((mask >> 8  & 255)) \
+        $((mask       & 255))
+}
+
+user_ccd="${1}"
+ACTION="${script_type}"
+
+log "DEBUG: Script called. ACTION=${ACTION}, CCD=${user_ccd}, COMMON_NAME=${common_name}"
+
+if [ "${ACTION}" = "client-connect" ]; then
+    # Функция обработки одного ipset
+    process_ipset() {
+        local set_name="$1"
+        log "DEBUG: Processing ipset '${set_name}'"
+
+        # Получаем только IPv4/CIDR, игнорируем заголовки ipset
+        local entries
+        entries=$(sudo /etc/openvpn/server/cmd/show_ipset.sh "${set_name}" 2>/dev/null)
+
+        if [ -z "$entries" ]; then
+            log "DEBUG: ipset '${set_name}' is empty or not found"
+            return 0
+        fi
+
+        while IFS= read -r line; do
+            [[ -z "$line" ]] && continue
+            local ip mask
+
+            if [[ "$line" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)/([0-9]+)$ ]]; then
+                ip="${BASH_REMATCH[1]}"
+                mask=$(cidr_to_mask "${BASH_REMATCH[2]}") || continue
+            elif [[ "$line" =~ ^([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)$ ]]; then
+                ip="${BASH_REMATCH[1]}"
+                mask="255.255.255.255"
+            else
+                log "WARN: Skipping invalid format in ipset '${set_name}': '${line}'"
+                continue
+            fi
+
+            echo "push \"route ${ip} ${mask} net_gateway\"" >> "${user_ccd}"
+            log "DEBUG: Added route: ${ip} ${mask}"
+        done <<< "$entries"
+    }
+
+    process_ipset "direct"
+    process_ipset "route_soc"
+else
+    log "DEBUG: Action '${ACTION}' is not 'client-connect', skipping route injection"
+fi
+
+exit 0

@@ -35,9 +35,13 @@ fi
 
 ############ For office ###################
 
-# local dns
-$IP_CMD route $ACTION 10.1.1.1/32 via $VPN_GATEWAY 2>/dev/null || true
-log_debug "DNS route: $ACTION 10.1.1.1/32 via $VPN_GATEWAY"
+# dns from awg
+if $IP_CMD route get fibmatch "$VPN_DNS_UPLINK" 2>/dev/null | grep -q "via $VPN_GATEWAY dev"; then
+        log_debug "DNS route already exists (via $VPN_GATEWAY): $VPN_DNS_UPLINK"
+    else
+        $IP_CMD route add "$VPN_DNS_UPLINK" via "$VPN_GATEWAY" 2>/dev/null || true
+        log_debug "DNS route: add $VPN_DNS_UPLINK via $VPN_GATEWAY"
+    fi
 
 # create ipset if not exists
 create_ipset_if_not_exists "$ROUTE_VPN_IPSET" "hash:net"
@@ -59,6 +63,15 @@ else
 fi
 
 ############ The END direct routes ###################
+
+# policy for OpenVpn
+#ip route $ACTION default via $VPN_GATEWAY table awg 2>/dev/null || true
+#ip rule $ACTION from 10.254.254.1 lookup main pref 100  2>/dev/null || true
+#ip rule $ACTION from 10.254.254.0/24 to 10.254.254.0/24 lookup main pref 101  2>/dev/null || true
+# direct nets
+#ip rule $ACTION from 10.254.254.0/24 fwmark 100 table main pref 102 2>/dev/null || true
+# default to vpn
+#ip rule $ACTION from 10.254.254.0/24 table awg pref 5000 2>/dev/null || true
 
 # Удаляем маршрут до шлюза только при down
 if [[ "$MODE" == "down" ]]; then

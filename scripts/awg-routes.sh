@@ -47,8 +47,8 @@ if $IP_CMD route get fibmatch "$VPN_DNS_UPLINK" 2>/dev/null | grep -q "via $VPN_
 create_ipset_if_not_exists "$ROUTE_VPN_IPSET" "hash:net"
 
 # add routes by ipset route_vpn
-if $IPSET list "$ROUTE_VPN_IPSET" -n &>/dev/null; then
-    IP_LIST=$($IPSET save "$ROUTE_VPN_IPSET" 2>/dev/null | grep -E "^add $ROUTE_VPN_IPSET " | awk '{ print $3 }')
+if $IPSET_CMD list "$ROUTE_VPN_IPSET" -n &>/dev/null; then
+    IP_LIST=$($IPSET_CMD save "$ROUTE_VPN_IPSET" 2>/dev/null | grep -E "^add $ROUTE_VPN_IPSET " | awk '{ print $3 }')
     if [[ -n "$IP_LIST" ]]; then
         while IFS= read -r ip; do
             [[ -z "$ip" ]] && continue

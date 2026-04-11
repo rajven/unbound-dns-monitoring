@@ -222,6 +222,9 @@ my %search_domains = (
     # API для разработчиков
     '^youtube\.googleapis\.com$'  => 'youtube',
     '\.youtube\.googleapis\.com$' => 'youtube',
+    # youtubei.googleapis.com
+    '^youtubei\.googleapis\.com$'  => 'youtube',
+    '^\.youtubei\.googleapis\.com$'  => 'youtube',
 );
 
 

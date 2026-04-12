@@ -73,15 +73,6 @@ if ($@) {
 }
 log_debug("Lock acquired successfully");
 
-# Set low process priority (nice = 19)
-eval {
-    setpriority(0, 0, 19);
-    log_debug("Process priority set to 19");
-};
-if ($@) {
-    log_warning("Failed to set process priority: $@");
-}
-
 # === GLOBAL VARIABLES ===
 
 # === IPSET CONFIG ===
@@ -224,7 +215,25 @@ my %search_domains = (
     '\.youtube\.googleapis\.com$' => 'youtube',
     # youtubei.googleapis.com
     '^youtubei\.googleapis\.com$'  => 'youtube',
-    '^\.youtubei\.googleapis\.com$'  => 'youtube',
+    '\.youtubei\.googleapis\.com$'  => 'youtube',
+    # gpht.com
+    '^gpht\.com$'  => 'youtube',
+    '\.gpht\.com$'  => 'youtube',
+    # play.google.com
+    '^play\.google\.com$'  => 'youtube',
+    '\.play\.google\.com$'  => 'youtube',
+    # youtubeembeddedplayer.googleapis.com,
+    '^youtubeembeddedplayer\.googleapis\.com$'  => 'youtube',
+    '\.youtubeembeddedplayer\.googleapis\.com$'  => 'youtube',
+    # googleusercontent.com,
+    '^googleusercontent\.com$'  => 'youtube',
+    '\.googleusercontent\.com$'  => 'youtube',
+    # gstatic.com
+    '^gstatic\.com$'  => 'youtube',
+    '\.gstatic\.com$'  => 'youtube',
+    # l.google.com
+    '^l\.google\.com$'  => 'youtube',
+    '\.l\.google.com$'  => 'youtube',
 );
 
 

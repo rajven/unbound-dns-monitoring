@@ -64,14 +64,13 @@ fi
 
 ############ The END direct routes ###################
 
-# policy for OpenVpn
-#$IP_CMD route $ACTION default via $VPN_GATEWAY table awg 2>/dev/null || true
-#$IP_CMD rule $ACTION from 10.254.254.1 lookup main pref 100  2>/dev/null || true
-#$IP_CMD rule $ACTION from 10.254.254.0/24 to 10.254.254.0/24 lookup main pref 101  2>/dev/null || true
-# direct nets
-#$IP_CMD rule $ACTION from 10.254.254.0/24 fwmark 100 table main pref 102 2>/dev/null || true
-# default to vpn
-#$IP_CMD rule $ACTION from 10.254.254.0/24 table awg pref 5000 2>/dev/null || true
+# custom user routes
+USER_RULES="/etc/unbound-dns-monitor/awg.routes"
+if [ -r "$USER_RULES" ]; then
+    . "$USER_RULES"
+else
+    log_error "Файл $USER_RULES не существует или недоступен для чтения"
+fi
 
 # Удаляем маршрут до шлюза при down
 if [[ "$MODE" == "down" ]]; then

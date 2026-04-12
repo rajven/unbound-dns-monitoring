@@ -57,7 +57,7 @@ my $YTB_ROUTES_IPSET = $config{'ROUTE_YOUTUBE_IPSET'} || 'route_youtube';
 # === LOGGING SETUP ===
 
 my $DEBUG = 0;
-my $LOG_LEVEL = $config{'LOG_LEVEL'} || 'INFO';
+my $LOG_LEVEL = $config{'LOG_LEVEL'} // 'INFO';
 if ($LOG_LEVEL eq 'DEBUG') { $DEBUG=1; }
 
 # === LOCKING AND INITIALIZATION ===
@@ -75,167 +75,18 @@ log_debug("Lock acquired successfully");
 
 # === GLOBAL VARIABLES ===
 
-# === IPSET CONFIG ===
-my %ipsets = (
-    'direct' => 'hash:ip',
-    'telegram' => 'hash:ip',
-    'whatsapp' => 'hash:ip',
-    'youtube' => 'hash:ip',
-    'instagram' => 'hash:ip',
-    'facebook' => 'hash:ip',
-    'vpn'    => 'hash:ip',
-);
+my %ipsets = %{$config{UNBOUND_IPSETS}};
 
 my %ipsets_data;
 
 # Domain patterns with routing action - use single quotes for regex literals
-my %search_domains = (
-    # Local domains - direct routing
-    '\.ru$'  => 'direct',
-    '\.su$'  => 'direct',
+my %search_domains;
 
-    # TELEGRAM - vpn routing
-    # Основной сайт
-    '^telegram\.org$'  => 'telegram',
-    '\.telegram\.org$' => 'telegram',
-    # Короткие ссылки на профили и каналы
-    '^t\.me$'  => 'telegram',
-    '\.t\.me$' => 'telegram',
-    # Хостинг медиафайлов и CDN
-    '^telesco\.pe$'  => 'telegram',
-    '\.telesco\.pe$' => 'telegram',
-    # Альтернативный домен для ссылок
-    '^telegram\.me$'  => 'telegram',
-    '\.telegram\.me$' => 'telegram',
-    # Платформа для публикации статей
-    '^telegra\.ph$'  => 'telegram',
-    '\.telegra\.ph$' => 'telegram',
-    # CDN для контента Telegraph
-    '^graph\.org$'  => 'telegram',
-    '\.graph\.org$' => 'telegram',
-    # Система комментариев
-    '^comments\.app$'  => 'telegram',
-    '\.comments\.app$' => 'telegram',
-    # Домен для разработчиков
-    '^tg\.dev$'  => 'telegram',
-    '\.tg\.dev$' => 'telegram',
-    # Бот-домен
-    '^telegram\.dog$'  => 'telegram',
-    '\.telegram\.dog$' => 'telegram',
-
-    # WhatsApp - vpn routing
-    # Основной сайт
-    '^whatsapp\.com$'  => 'whatsapp',
-    '\.whatsapp\.com$' => 'whatsapp',
-    # Основная инфраструктура и сервисы
-    '^whatsapp\.net$'  => 'whatsapp',
-    '\.whatsapp\.net$' => 'whatsapp',
-    # Короткие ссылки для чатов
-    '^wa\.me$'  => 'whatsapp',
-    '\.wa\.me$' => 'whatsapp',
-    # Сокращение ссылок
-    '^wl\.co$'  => 'whatsapp',
-    '\.wl\.co$' => 'whatsapp',
-    # Брендовые ресурсы
-    '^whatsappbrand\.com$'  => 'whatsapp',
-    '\.whatsappbrand\.com$' => 'whatsapp',
-    # Веб-версия и медиа
-    '^media\.whatsapp\.com$'  => 'whatsapp',
-    '\.media\.whatsapp\.com$' => 'whatsapp',
-    # Динамические edge-серверы
-    '^dyn\.web\.whatsapp\.com$'  => 'whatsapp',
-    '\.dyn\.web\.whatsapp\.com$' => 'whatsapp',
-
-    # Facebook - vpn routing
-    # Основная платформа
-    '^facebook\.com$'  => 'facebook',
-    '\.facebook\.com$' => 'facebook',
-    # Короткие ссылки
-    '^fb\.me$'  => 'facebook',
-    '\.fb\.me$' => 'facebook',
-    # Хостинг пользовательского контента
-    '^fbsbx\.com$'  => 'facebook',
-    '\.fbsbx\.com$' => 'facebook',
-    # Отдельный домен для Messenger
-    '^messenger\.com$'  => 'facebook',
-    '\.messenger\.com$' => 'facebook',
-    # Уведомления по почте
-    '^facebookmail\.com$'  => 'facebook',
-    '\.facebookmail\.com$' => 'facebook',
-    # CDN для контента
-    '^fbcdn\.net$'  => 'facebook',
-    '\.fbcdn\.net$' => 'facebook',
-    # Корпоративный сайт компании
-    '^meta\.com$'  => 'facebook',
-    '\.meta\.com$' => 'facebook',
-
-    # Instagram - vpn routing
-    # Основной сайт
-    '^instagram\.com$'  => 'instagram',
-    '\.instagram\.com$' => 'instagram',
-    # CDN для изображений и видео
-    '^cdninstagram\.com$'  => 'instagram',
-    '\.cdninstagram\.com$' => 'instagram',
-    # Короткие ссылки
-    '^instagr\.am$'  => 'instagram',
-    '\.instagr\.am$' => 'instagram',
-    # Ссылки для прямого обмена сообщениями
-    '^ig\.me$'  => 'instagram',
-    '\.ig\.me$' => 'instagram',
-    # Вспомогательный сервис
-    '^igsonar\.com$'  => 'instagram',
-    '\.igsonar\.com$' => 'instagram',
-
-    # YouTube - direct routing by route_youtube ipset
-    # Основная платформа
-    '^youtube\.com$'  => 'youtube',
-    '\.youtube\.com$' => 'youtube',
-    # Короткие ссылки на видео
-    '^youtu\.be$'  => 'youtube',
-    '\.youtu\.be$' => 'youtube',
-    # Встраивание видео без отслеживания
-    '^youtube-nocookie\.com$'  => 'youtube',
-    '\.youtube-nocookie\.com$' => 'youtube',
-    # Хостинг видеопотоков
-    '^googlevideo\.com$'  => 'youtube',
-    '\.googlevideo\.com$' => 'youtube',
-    # CDN для превью и аватаров
-    '^ytimg\.com$'  => 'youtube',
-    '\.ytimg\.com$' => 'youtube',
-    # Контент пользователей и CDN
-    '^yt3\.googleusercontent\.com$'  => 'youtube',
-    '\.yt3\.googleusercontent\.com$' => 'youtube',
-    # Специализированные сервисы
-    '^youtubeeducation\.com$'  => 'youtube',
-    '\.youtubeeducation\.com$' => 'youtube',
-    '^youtubekids\.com$'  => 'youtube',
-    '\.youtubekids\.com$' => 'youtube',
-    # API для разработчиков
-    '^youtube\.googleapis\.com$'  => 'youtube',
-    '\.youtube\.googleapis\.com$' => 'youtube',
-    # youtubei.googleapis.com
-    '^youtubei\.googleapis\.com$'  => 'youtube',
-    '\.youtubei\.googleapis\.com$'  => 'youtube',
-    # gpht.com
-    '^gpht\.com$'  => 'youtube',
-    '\.gpht\.com$'  => 'youtube',
-    # play.google.com
-    '^play\.google\.com$'  => 'youtube',
-    '\.play\.google\.com$'  => 'youtube',
-    # youtubeembeddedplayer.googleapis.com,
-    '^youtubeembeddedplayer\.googleapis\.com$'  => 'youtube',
-    '\.youtubeembeddedplayer\.googleapis\.com$'  => 'youtube',
-    # googleusercontent.com,
-    '^googleusercontent\.com$'  => 'youtube',
-    '\.googleusercontent\.com$'  => 'youtube',
-    # gstatic.com
-    '^gstatic\.com$'  => 'youtube',
-    '\.gstatic\.com$'  => 'youtube',
-    # l.google.com
-    '^l\.google\.com$'  => 'youtube',
-    '\.l\.google.com$'  => 'youtube',
-);
-
+foreach my $domain (keys %{$config{UNBOUND_PATTERNS}}) {
+    my $value = $config{UNBOUND_PATTERNS}->{$domain};
+    my $escaped = quotemeta($domain);
+    $search_domains{qr/(?:^|\.)${escaped}$/} = $value;
+}
 
 # Initialize ipsets
 eval {
@@ -308,8 +159,8 @@ my $resolver = Net::DNS::Resolver->new(
 
 log_info("Starting DNS monitor script");
 log_debug("Debug mode is enabled");
-log_debug("Mute time set to $mute_time seconds");
-log_debug("Log file: $log_file");
+log_info("Mute time set to $mute_time seconds");
+log_info("Log file: $log_file");
 
 # Main infinite log-processing loop
 while (1) {
@@ -331,16 +182,16 @@ while (1) {
             next unless $logline;
             chomp($logline);
 
-            log_debug("Processing log line: $logline") if $DEBUG > 1;
+            log_info("Processing log line: $logline");
 
             if ($logline =~ /info:\s+[\d\.]+\s+([^\s]+)\.\s+A\s+IN\s*$/) {
                 my $domain = lc($1);
-                log_debug("Found A query for domain: $domain");
+                log_info("Found A query for domain: $domain");
 
                 if (exists $processed_domains{$domain}) {
                     my $time_since = time() - $processed_domains{$domain};
                     if ($time_since < $mute_time) {
-                        log_debug("Skipping $domain (processed $time_since seconds ago, mute_time=$mute_time)");
+                        log_info("Skipping $domain (processed $time_since seconds ago, mute_time=$mute_time)");
                         next;
                     }
                 }
@@ -348,7 +199,7 @@ while (1) {
 
                 my $action = match_domain($domain);
                 if (!$action) {
-                    log_debug("No pattern match for domain: $domain");
+                    log_info("No pattern match for domain: $domain");
                     next;
                 }
 
@@ -360,7 +211,7 @@ while (1) {
                     next;
                 }
 
-                log_debug("Resolved " . scalar(@ipv4_list) . " IP(s) for $domain");
+                log_info("Resolved " . scalar(@ipv4_list) . " IP(s) for $domain");
 
                 foreach my $ip (@ipv4_list) {
                     add_ip_to_ipset($ip, $domain, $action);
@@ -382,9 +233,10 @@ exit;
 sub match_domain {
     my ($domain) = @_;
 
+    log_debug("Analyze domain $domain...");
     foreach my $pattern (keys %search_domains) {
         if ($domain =~ /$pattern/) {
-            log_debug("Domain $domain matched pattern: $pattern");
+            log_info("Domain $domain matched pattern: $pattern");
             return $search_domains{$pattern};
         }
     }
@@ -414,7 +266,7 @@ sub _resolve_recursive {
     }
     $visited_ref->{$name} = 1;
 
-    log_debug("Resolving: $name");
+    log_info("Resolving: $name");
 
     my $query = eval { $resolver->search($name) };
     if (!$query || $@) {
@@ -437,7 +289,7 @@ sub _resolve_recursive {
         }
         elsif ($rr->type eq 'CNAME') {
             my $cname = lc($rr->cname);
-            log_debug("Following CNAME: $name -> $cname");
+            log_info("Following CNAME: $name -> $cname");
             push @results, _resolve_recursive($cname, $seen_ips_ref, $visited_ref);
         }
     }
@@ -451,14 +303,14 @@ sub add_ip_to_ipset {
 
     # Check Patricia cache first
     if ($dns_cache->match_string($ip)) {
-        log_debug("IP $ip already in Patricia cache, skipping");
+        log_info("IP $ip already in Patricia cache, skipping");
         return;
     }
 
     # Check local ipset tracker
     my $set_name = $action;
     if (exists $ipset_added{$ip} && $ipset_added{$ip} eq $set_name) {
-        log_debug("IP $ip already tracked in $set_name, skipping");
+        log_info("IP $ip already tracked in $set_name, skipping");
         return;
     }
 
@@ -468,7 +320,7 @@ sub add_ip_to_ipset {
     # For direct action: skip if IP belongs to RU_IPS
     if ($action eq 'direct') {
         if ($ru_patricia->match_string($ip)) {
-            log_debug("IP $ip is in $RU_IPSET range, skipping addition to direct set");
+            log_info("IP $ip is in $RU_IPSET range, skipping addition to direct set");
             return;
         }
     }
@@ -476,14 +328,14 @@ sub add_ip_to_ipset {
     # For youtube action: skip if IP belongs to route_youtube
     if ($action eq 'youtube' && $youtube_direct && $route_youtube) {
         if ($route_youtube->match_string($ip)) {
-            log_debug("IP $ip is in custom $YTB_ROUTES_IPSET range, skipping addition to youtube set");
+            log_info("IP $ip is in custom $YTB_ROUTES_IPSET range, skipping addition to youtube set");
             return;
         }
     }
 
     # Check exists in loaded ipset data
     if ($ipsets_data{$action}->match_string($ip)) {
-        log_debug("IP $ip already in $action ipset, skipping addition to set");
+        log_info("IP $ip already in $action ipset, skipping addition to set");
         return;
     }
 
@@ -524,7 +376,7 @@ sub prepare_comment {
     $template =~ s/[\^\$]//g;
     $template =~ s/\\\.//g;
     $template =~ s/[\\\[\]\(\)\{\}\*\+\?\|]//g;
-    log_debug("Comment prepared: '$original' -> '$template'") if $DEBUG > 1;
+    log_debug("Comment prepared: '$original' -> '$template'");
     return $template;
 }
 
@@ -629,6 +481,73 @@ sub save_ipsets {
     }
 }
 
+sub read_bash_config {
+    my ($file) = @_;
+    my %config;
+    open(my $fh, '<', $file) or die "Cannot open $file: $!";
+    my $in_array = 0;
+    my $array_name = '';
+    my $array_content = '';
+    my $brace_depth = 0;
+    while (my $line = <$fh>) {
+        chomp $line;
+        next if $line =~ /^\s*#/;
+        next if $line =~ /^\s*$/;
+        # Обработка массивов
+        if (!$in_array && $line =~ /^\s*(\S+)\s*=\s*\((.*)$/) {
+            $array_name = $1;
+            $in_array = 1;
+            my $rest = $2;
+            if ($rest) {
+                print "ARRAY $array_name :: $rest\n";
+                $rest=~s/\"//g;
+                $rest=~s/\(//g;
+                my $item = _parse_array($rest);
+                foreach my $key (keys %$item){
+                    $config{$array_name}{$key}=$item->{$key};
+                    }
+                }
+            next;
+            }
+        if ($in_array && $line =~ /^\s*\)\s*$/) {
+            $array_name = '';
+            $in_array = 0;
+            next;
+            }
+        if ($in_array) {
+            $line=~s/\"//g;
+            $line=~s/\(//g;
+            my $item = _parse_array($line);
+            foreach my $key (keys %$item){
+                $config{$array_name}{$key}=$item->{$key};
+                }
+            next;
+        }
+        # Обычные переменные
+        if ($line =~ /^\s*(\S+)\s*=\s*(.*?)\s*$/) {
+            my $name = $1;
+            my $value = $2;
+            $value =~ s/^["']//;
+            $value =~ s/["']$//;
+            $config{$name} = $value;
+        }
+    }
+    close($fh);
+    return %config;
+}
+
+sub _parse_array {
+    my ($content) = @_;
+    my %result;
+    $content =~ s/^\s+//;
+    $content =~ s/\s+$//;
+    $content =~ s/,$//;
+    if ($content =~ /^(.*)\s*=\s*(.*)\s*$/) {
+        $result{$1} = $2;
+        }
+    return \%result;
+}
+
 # === LOAD IPSET INTO PATRICIA ===
 sub load_ipset_data {
     my $ipset_name = shift;
@@ -673,7 +592,7 @@ sub load_ipset_data {
         chomp $line;
         my $comment = '';
         # Format: IP[/mask] [comment "text"]
-        # Examples: 
+        # Examples:
         #   192.168.1.1
         #   149.154.175.209 comment "pluto-1.web.telegram.org"
         #   10.0.0.0/24 comment "internal network"
@@ -689,7 +608,7 @@ sub load_ipset_data {
                 $patricia_ref->add_string($cidr);
             }
             $count++;
-            log_debug("Added $cidr to $ipset_name Patricia") if $DEBUG > 1;
+            log_debug("Added $cidr to $ipset_name Patricia");
         } else {
             # Handle lines without optional parts
             if ($line =~ /^\s*(\d+\.\d+\.\d+\.\d+)(?:\/(\d+))?\s*$/) {
@@ -698,38 +617,10 @@ sub load_ipset_data {
                 my $cidr = "$ip/$mask";
                 $patricia_ref->add_string($cidr);
                 $count++;
-                log_debug("Added $cidr to $ipset_name Patricia") if $DEBUG > 1;
+                log_debug("Added $cidr to $ipset_name Patricia");
             }
         }
     }
     close $fh;
     log_info("Loaded $count networks from $ipset_name ipset");
-}
-
-sub read_bash_config {
-    my ($file) = @_;
-    my %config;
-    open(my $fh, '<', $file) or die "Cannot open $file: $!";
-    while (my $line = <$fh>) {
-        chomp $line;
-        next if $line =~ /^\s*#/;
-        next if $line =~ /^\s*$/;
-        # Ищем переменные вида NAME="value" или NAME=value
-        if ($line =~ /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*?)\s*$/) {
-            my $name = $1;
-            my $value = $2;
-            # Убираем кавычки
-            $value =~ s/^["']//;
-            $value =~ s/["']$//;
-            # Обрабатываем массивы вида (item1 item2 ...)
-            if ($value =~ /^\((.*)\)$/) {
-                my @items = split(/\s+/, $1);
-                $config{$name} = \@items;
-            } else {
-                $config{$name} = $value;
-            }
-        }
-    }
-    close($fh);
-    return %config;
 }

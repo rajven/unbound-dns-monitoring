@@ -19,6 +19,7 @@ use File::Tail;
 use Fcntl qw(:flock);
 use Net::Patricia;
 use Net::DNS;
+use Net::IDN::Encode qw(domain_to_ascii domain_to_unicode);
 
 # конфиг
 my $CONFIG_FILE = '/etc/unbound-dns-monitor/unbound-dns-monitor.cfg';
@@ -84,8 +85,10 @@ my %search_domains;
 
 foreach my $domain (keys %{$config{UNBOUND_PATTERNS}}) {
     my $value = $config{UNBOUND_PATTERNS}->{$domain};
-    my $escaped = quotemeta($domain);
-    $search_domains{qr/(?:^|\.)${escaped}$/} = $value;
+    my $punycode_domain = eval { domain_to_ascii($domain) } // $domain;
+    my $escaped = quotemeta($punycode_domain);
+    $search_domains{qr/(?:^|\.)${escaped}$/}->{ipset} = $value;
+    $search_domains{qr/(?:^|\.)${escaped}$/}->{pattern} = $domain;
 }
 
 # Initialize ipsets
@@ -235,9 +238,9 @@ sub match_domain {
 
     log_debug("Analyze domain $domain...");
     foreach my $pattern (keys %search_domains) {
-        if ($domain =~ /$pattern/) {
-            log_info("Domain $domain matched pattern: $pattern");
-            return $search_domains{$pattern};
+        if ($domain =~ /$pattern/i) {
+            log_info("Domain $domain matched pattern: ".$search_domains{$pattern}->{pattern});
+            return $search_domains{$pattern}->{ipset};
         }
     }
     return undef;

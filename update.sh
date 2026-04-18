@@ -1,5 +1,5 @@
 #!/bin/bash
-# Installation script for unbound-dns-monitor
+# Update script for unbound-dns-monitor
 
 set -e
 
@@ -21,10 +21,10 @@ if [[ $EUID -ne 0 ]]; then
     log_error "This script must be run as root"
 fi
 
-log_info "Installing unbound-dns-monitor..."
+log_info "Updating unbound-dns-monitor..."
 
 # 1. Install packages
-log_info "Installing required packages..."
+log_info "Updating required packages..."
 apt update
 apt install -y libfile-tail-perl libnet-patricia-perl libnet-dns-perl libnet-idn-encode-perl \
                ipset unbound wget rsync netfilter-persistent 
@@ -38,8 +38,10 @@ mkdir -p /etc/apparmor.d/local
 
 # 3. Copy configuration
 log_info "Copying configuration..."
-cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/unbound-dns-monitor.cfg" /etc/unbound-dns-monitor/
-cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/awg.routes" /etc/unbound-dns-monitor/
+for f in unbound-dns-monitor.cfg awg.routes; do
+  cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new"
+  diff -u "/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new" || true
+done
 cp -f "$SCRIPT_DIR/lib/dns-monitor-lib.sh" /usr/local/lib/
 chmod 644 /usr/local/lib/dns-monitor-lib.sh
 
@@ -50,12 +52,8 @@ cp -f "$SCRIPT_DIR/scripts/unbound-dns-monitor.pl" /usr/local/bin/
 chmod +x /usr/local/bin/*.sh
 chmod +x /usr/local/bin/unbound-dns-monitor.pl
 
-# 5. Copy unbound configuration
-log_info "Configuring unbound..."
-rsync -av "$SCRIPT_DIR/unbound/" /etc/unbound/
-
 # 6. Copy systemd services
-log_info "Installing systemd services..."
+log_info "Updating systemd services..."
 cp -f "$SCRIPT_DIR/systemd/unbound-dns-monitor.service" /etc/systemd/system/
 mkdir -p /etc/systemd/system/netfilter-persistent.service.d
 cp -f "$SCRIPT_DIR/systemd/netfilter-persistent.service.d/override.conf" /etc/systemd/system/netfilter-persistent.service.d/ 2>/dev/null || true
@@ -77,15 +75,8 @@ touch /var/log/unbound/unbound.log
 chown -R unbound:unbound /var/log/unbound
 chmod 770 /var/log/unbound
 
-# 10. Generate unbound-control keys
-log_info "Generating unbound-control keys..."
-unbound-control-setup
+log_info "Completed successfully!"
+log_info "Restart services with: systemctl restart unbound unbound-dns-monitor.service"
 
-# 11. Enable services
-log_info "Enabling services..."
-systemctl daemon-reload
-systemctl enable unbound
-systemctl enable unbound-dns-monitor.service
-
-log_info "Installation completed successfully!"
-log_info "Start services with: systemctl start unbound unbound-dns-monitor.service"
+cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/unbound-dns-monitor.cfg" /etc/unbound-dns-monitor/unbound-dns-monitor.cfg.new
+cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/awg.routes" /etc/unbound-dns-monitor/awg.routes.new

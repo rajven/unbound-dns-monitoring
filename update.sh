@@ -75,8 +75,7 @@ touch /var/log/unbound/unbound.log
 chown -R unbound:unbound /var/log/unbound
 chmod 770 /var/log/unbound
 
+systemctl daemon-reload
+
 log_info "Completed successfully!"
 log_info "Restart services with: systemctl restart unbound unbound-dns-monitor.service"
-
-cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/unbound-dns-monitor.cfg" /etc/unbound-dns-monitor/unbound-dns-monitor.cfg.new
-cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/awg.routes" /etc/unbound-dns-monitor/awg.routes.new

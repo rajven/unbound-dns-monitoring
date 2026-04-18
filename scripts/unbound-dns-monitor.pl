@@ -86,6 +86,8 @@ my %search_domains;
 foreach my $domain (keys %{$config{UNBOUND_PATTERNS}}) {
     my $value = $config{UNBOUND_PATTERNS}->{$domain};
     my $punycode_domain = eval { domain_to_ascii($domain) } // $domain;
+    $punycode_domain=~s/^\s*\.//g;
+    $punycode_domain=~s/\.\s*$//g;
     my $escaped = quotemeta($punycode_domain);
     $search_domains{qr/(?:^|\.)${escaped}$/}->{ipset} = $value;
     $search_domains{qr/(?:^|\.)${escaped}$/}->{pattern} = $domain;

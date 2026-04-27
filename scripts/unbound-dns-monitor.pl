@@ -76,8 +76,23 @@ log_debug("Lock acquired successfully");
 
 # === GLOBAL VARIABLES ===
 
-my %ipsets = %{$config{UNBOUND_IPSETS}};
+my $ipset_exceptions =  new Net::Patricia;
+my $added_exceptions = 0;
+foreach my $excluded_subnet (keys %{$config{IPSET_EXCEPTIONS}}) {
+    next if (!$excluded_subnet or $excluded_subnet=~/^#/);
+    my $subnet_enabled = eval { $config{IPSET_EXCEPTIONS}->{$excluded_subnet} } // 0;
+    if ($subnet_enabled) {
+        $ipset_exceptions->add_string($excluded_subnet);
+        $added_exceptions++;
+        log_info("Added excluded subnet: $excluded_subnet (enabled)");
+    } else {
+        log_info("Skipped excluded subnet: $excluded_subnet (disabled or invalid)");
+    }
+}
+my $exceptions_count = keys %{$config{IPSET_EXCEPTIONS}};
+log_info("Processed $exceptions_count total exception subnets, added $added_exceptions subnets");
 
+my %ipsets = %{$config{UNBOUND_IPSETS}};
 my %ipsets_data;
 
 # Domain patterns with routing action - use single quotes for regex literals
@@ -219,6 +234,10 @@ while (1) {
                 log_info("Resolved " . scalar(@ipv4_list) . " IP(s) for $domain");
 
                 foreach my $ip (@ipv4_list) {
+                    if ($ipset_exceptions->match_string($ip)) {
+                        log_warning("Skipping ${ip} for ${domain}: excluded subnet");
+                        next;
+                        }
                     add_ip_to_ipset($ip, $domain, $action);
                 }
             }

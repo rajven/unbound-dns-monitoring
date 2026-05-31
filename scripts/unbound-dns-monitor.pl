@@ -95,17 +95,21 @@ log_info("Processed $exceptions_count total exception subnets, added $added_exce
 my %ipsets = %{$config{UNBOUND_IPSETS}};
 my %ipsets_data;
 
-# Domain patterns with routing action - use single quotes for regex literals
-my %search_domains;
+my @search_rules;
 
-foreach my $domain (keys %{$config{UNBOUND_PATTERNS}}) {
-    my $value = $config{UNBOUND_PATTERNS}->{$domain};
+foreach my $row (@{$config{UNBOUND_PATTERNS_ARRAY}}) {
+    my $domain = $row->{key};
+    my $value = $row->{value};
     my $punycode_domain = eval { domain_to_ascii($domain) } // $domain;
-    $punycode_domain=~s/^\s*\.//g;
-    $punycode_domain=~s/\.\s*$//g;
+    $punycode_domain =~ s/^\s*\.//g;
+    $punycode_domain =~ s/\.\s*$//g;
     my $escaped = quotemeta($punycode_domain);
-    $search_domains{qr/(?:^|\.)${escaped}$/}->{ipset} = $value;
-    $search_domains{qr/(?:^|\.)${escaped}$/}->{pattern} = $domain;
+    push @search_rules, {
+        regex => qr/(?:^|\.)${escaped}$/i,
+        ipset => $value,
+        pattern => $domain,
+        original_key => $row->{key}
+    };
 }
 
 # Initialize ipsets
@@ -163,6 +167,7 @@ if (!-f $log_file) {
 }
 
 # Track processed domains to avoid spam
+# processed_domains->{domain_name}-{query_type}
 my %processed_domains;
 
 # Track IPs already added to ipset
@@ -204,18 +209,22 @@ while (1) {
 
             log_info("Processing log line: $logline");
 
-            if ($logline =~ /info:\s+[\d\.]+\s+([^\s]+)\.\s+A\s+IN\s*$/) {
+            if ($logline =~ /info:\s+[\d\.]+\s+([^\s]+)\.\s+(A|HTTPS)\s+IN\s*$/) {
                 my $domain = lc($1);
-                log_info("Found A query for domain: $domain");
+                my $q_type = uc($2) // 'A';
 
-                if (exists $processed_domains{$domain}) {
-                    my $time_since = time() - $processed_domains{$domain};
+                next if (!$domain);
+
+                log_info("Found $q_type query for domain: $domain");
+
+                if (exists $processed_domains{$domain}{$q_type}) {
+                    my $time_since = time() - $processed_domains{$domain}{$q_type};
                     if ($time_since < $mute_time) {
                         log_info("Skipping $domain (processed $time_since seconds ago, mute_time=$mute_time)");
                         next;
                     }
                 }
-                $processed_domains{$domain} = time();
+                $processed_domains{$domain}{$q_type} = time();
 
                 my $action = match_domain($domain);
                 if (!$action) {
@@ -223,15 +232,15 @@ while (1) {
                     next;
                 }
 
-                log_info("Domain $domain matched $action pattern, resolving...");
+                log_info("Domain $domain matched $action action pattern, resolving...");
 
-                my @ipv4_list = resolve_domain_ipv4($domain);
+                my @ipv4_list = resolve_domain_ipv4($domain,$q_type);
                 if (!@ipv4_list) {
                     log_warning("No IPv4 addresses resolved for $domain");
                     next;
                 }
 
-                log_info("Resolved " . scalar(@ipv4_list) . " IP(s) for $domain");
+                log_info("Resolved " . scalar(@ipv4_list) . " IP(s) for $domain IN $q_type");
 
                 foreach my $ip (@ipv4_list) {
                     if ($ipset_exceptions->match_string($ip)) {
@@ -253,15 +262,13 @@ while (1) {
 
 exit;
 
-# Check domain against regex patterns, return action or undef
 sub match_domain {
     my ($domain) = @_;
-
     log_debug("Analyze domain $domain...");
-    foreach my $pattern (keys %search_domains) {
-        if ($domain =~ /$pattern/i) {
-            log_info("Domain $domain matched pattern: ".$search_domains{$pattern}->{pattern});
-            return $search_domains{$pattern}->{ipset};
+    foreach my $rule (@search_rules) {
+        if ($domain =~ $rule->{regex}) {
+            log_info("Domain $domain matched pattern: " . $rule->{pattern});
+            return $rule->{ipset};
         }
     }
     return undef;
@@ -269,37 +276,33 @@ sub match_domain {
 
 # Resolve domain recursively, return list of unique IPv4 addresses
 sub resolve_domain_ipv4 {
-    my ($domain) = @_;
+    my ($domain,$query_type) = @_;
     my %seen_ips;
     my %visited;
 
     log_debug("Starting recursive resolution for $domain");
-    my @results = _resolve_recursive($domain, \%seen_ips, \%visited);
+    my @results = _resolve_recursive($domain, $query_type, \%seen_ips, \%visited);
     log_debug("Resolution for $domain returned " . scalar(@results) . " IP(s)");
 
     return @results;
 }
 
-# Recursive helper for CNAME/A resolution
+# Recursive helper for CNAME/A/HTTPS resolution
 sub _resolve_recursive {
-    my ($name, $seen_ips_ref, $visited_ref) = @_;
-
+    my ($name, $query_type, $seen_ips_ref, $visited_ref) = @_;
+    $query_type = uc($query_type) // 'A';
     if (exists $visited_ref->{$name}) {
         log_debug("Prevented infinite loop at $name");
         return ();
     }
     $visited_ref->{$name} = 1;
-
-    log_info("Resolving: $name");
-
-    my $query = eval { $resolver->search($name) };
+    log_info("Resolving: $name (type: $query_type)");
+    my $query = eval { $resolver->search($name, $query_type) };
     if (!$query || $@) {
-        log_warning("DNS query failed for $name: " . ($@ || "unknown error"));
+        log_warning("DNS query failed for $name ($query_type): " . ($@ || "unknown error"));
         return ();
     }
-
     my @results;
-
     foreach my $rr ($query->answer) {
         if ($rr->type eq 'A') {
             my $ip = $rr->address;
@@ -311,14 +314,73 @@ sub _resolve_recursive {
             push @results, $ip;
             log_debug("Found A record: $name -> $ip");
         }
+        elsif ($rr->type eq 'HTTPS') {
+            log_debug("Processing HTTPS record for $name");
+            # Извлекаем IP из HTTPS записи
+            my @ips = extract_ips_from_https($rr);
+            foreach my $ip (@ips) {
+                if (!exists $seen_ips_ref->{$ip}) {
+                    $seen_ips_ref->{$ip} = 1;
+                    push @results, $ip;
+                    log_info("Found IPv4 hint in HTTPS: $name -> $ip");
+                }
+            }
+            # Получаем target (если есть)
+            my $rdata = $rr->rdata;
+            my $offset = 2;  # пропускаем priority
+            my $target = '';
+            while ($offset < length($rdata) && substr($rdata, $offset, 1) ne "\x00") {
+                $target .= substr($rdata, $offset, 1);
+                $offset++;
+            }
+            # Если есть target и он не пустой и не текущий домен
+            if ($target && $target ne '.' && $target ne '' && $target ne $name) {
+                log_info("Following HTTPS target: $name -> $target");
+                push @results, _resolve_recursive($target, 'A', $seen_ips_ref, $visited_ref);
+            }
+        }
         elsif ($rr->type eq 'CNAME') {
             my $cname = lc($rr->cname);
             log_info("Following CNAME: $name -> $cname");
-            push @results, _resolve_recursive($cname, $seen_ips_ref, $visited_ref);
+            push @results, _resolve_recursive($cname, $query_type, $seen_ips_ref, $visited_ref);
         }
     }
-
+    if (!@results && $query_type eq 'HTTPS') {
+        log_debug("No IPs extracted from HTTPS record for $name");
+    }
     return @results;
+}
+
+sub extract_ips_from_https {
+    my ($rr) = @_;
+    my @ips;
+    my $rdata = $rr->rdata;
+    my $offset = 0;
+    # Читаем priority (2 байта)
+    my $priority = unpack("n", substr($rdata, $offset, 2));
+    $offset += 2;
+    # Читаем target (до нулевого байта)
+    while ($offset < length($rdata) && substr($rdata, $offset, 1) ne "\x00") {
+        $offset++;
+    }
+    $offset++;  # пропускаем нулевой байт
+    # Читаем параметры
+    while ($offset + 4 <= length($rdata)) {
+        my $key = unpack("n", substr($rdata, $offset, 2));
+        my $len = unpack("n", substr($rdata, $offset + 2, 2));
+        $offset += 4;
+        last if $offset + $len > length($rdata);
+        if ($key == 4) {  # ipv4hint
+            my $value = substr($rdata, $offset, $len);
+            my @ip_ints = unpack("N*", $value);
+            foreach my $ip_int (@ip_ints) {
+                my $ip = join('.', unpack('C4', pack('N', $ip_int)));
+                push @ips, $ip;
+            }
+        }
+        $offset += $len;
+    }
+    return @ips;
 }
 
 # Add IP to Patricia cache and ipset if not already present
@@ -523,12 +585,16 @@ sub read_bash_config {
             $in_array = 1;
             my $rest = $2;
             if ($rest) {
-                print "ARRAY $array_name :: $rest\n";
+                print "HASH $array_name :: $rest\n";
                 $rest=~s/\"//g;
                 $rest=~s/\(//g;
                 my $item = _parse_array($rest);
                 foreach my $key (keys %$item){
+                    my %row;
+                    $row{key} = $key;
+                    $row{value} = $item->{$key};
                     $config{$array_name}{$key}=$item->{$key};
+                    push(@{$config{$array_name.'_ARRAY'}},\%row);
                     }
                 }
             next;
@@ -543,7 +609,11 @@ sub read_bash_config {
             $line=~s/\(//g;
             my $item = _parse_array($line);
             foreach my $key (keys %$item){
+                my %row;
+                $row{key} = $key;
+                $row{value} = $item->{$key};
                 $config{$array_name}{$key}=$item->{$key};
+                push(@{$config{$array_name.'_ARRAY'}},\%row);
                 }
             next;
         }
@@ -557,6 +627,7 @@ sub read_bash_config {
         }
     }
     close($fh);
+
     return %config;
 }
 

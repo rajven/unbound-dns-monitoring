@@ -58,9 +58,8 @@ cp -f "$SCRIPT_DIR/systemd/unbound-dns-monitor.service" /etc/systemd/system/
 mkdir -p /etc/systemd/system/netfilter-persistent.service.d
 cp -f "$SCRIPT_DIR/systemd/netfilter-persistent.service.d/override.conf" /etc/systemd/system/netfilter-persistent.service.d/ 2>/dev/null || true
 
-# 7. Copy init script
-cp -f "$SCRIPT_DIR/init.d/ipset" /etc/init.d/ 2>/dev/null || true
-chmod +x /etc/init.d/ipset 2>/dev/null || true
+# 7. remove old ipset-utils
+[ -e /etc/init.d/ipset ] && rm -f /etc/init.d/ipset
 
 # 8. Configure apparmor
 if [[ -f "$SCRIPT_DIR/apparmor.d/local/usr.sbin.unbound" ]]; then

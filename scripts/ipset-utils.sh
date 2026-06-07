@@ -124,7 +124,7 @@ start_ipset() {
         [ -f "$conf" ] || continue
         name=$(get_set_name "$conf")
         [ -z "$name" ] && continue
-
+        [[ "$name" =~ "f2b-" ]] && continue
         if "$IPSET" list "$name" &>/dev/null; then
             # Set already exists → atomic replace
             replace_atomic "$name" || ret=1
@@ -161,6 +161,7 @@ save_ipset() {
     local ret=0
     for name in $(ipset list -n); do
         [ -z "$name" ] && continue
+        [[ "$name" =~ "f2b-" ]] && continue
         conf="$IPSET_DIR/$name"
         if "$IPSET" save "$name" > "$conf.tmp" 2>/dev/null; then
                 mv "$conf.tmp" "$conf.conf"

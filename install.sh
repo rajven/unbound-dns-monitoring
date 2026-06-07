@@ -60,28 +60,24 @@ cp -f "$SCRIPT_DIR/systemd/unbound-dns-monitor.service" /etc/systemd/system/
 mkdir -p /etc/systemd/system/netfilter-persistent.service.d
 cp -f "$SCRIPT_DIR/systemd/netfilter-persistent.service.d/override.conf" /etc/systemd/system/netfilter-persistent.service.d/ 2>/dev/null || true
 
-# 7. Copy init script
-cp -f "$SCRIPT_DIR/init.d/ipset" /etc/init.d/ 2>/dev/null || true
-chmod +x /etc/init.d/ipset 2>/dev/null || true
-
-# 8. Configure apparmor
+# 7. Configure apparmor
 if [[ -f "$SCRIPT_DIR/apparmor.d/local/usr.sbin.unbound" ]]; then
     log_info "Configuring apparmor..."
     cp -f "$SCRIPT_DIR/apparmor.d/local/usr.sbin.unbound" /etc/apparmor.d/local/
     apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound 2>/dev/null || true
 fi
 
-# 9. Setup log files
+# 8. Setup log files
 log_info "Setting up log files..."
 touch /var/log/unbound/unbound.log
 chown -R unbound:unbound /var/log/unbound
 chmod 770 /var/log/unbound
 
-# 10. Generate unbound-control keys
+# 9. Generate unbound-control keys
 log_info "Generating unbound-control keys..."
 unbound-control-setup
 
-# 11. Enable services
+# 10. Enable services
 log_info "Enabling services..."
 systemctl daemon-reload
 systemctl enable unbound

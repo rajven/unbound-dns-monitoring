@@ -15,7 +15,7 @@ source "$LIBRARY"
 main() {
 
     local mode="${1:-up}"
-    local action
+    local ACTION
     local ip
     local ip_list
     local user_rules="/etc/unbound-dns-monitor/awg.routes"
@@ -39,7 +39,7 @@ main() {
 
     case "$mode" in
         up)
-            action=add
+            ACTION=add
 
             $IP_CMD route add \
                 "$VPN_GATEWAY/32" \
@@ -50,7 +50,7 @@ main() {
             ;;
 
         down)
-            action=del
+            ACTION=del
             log_info "VPN state DOWN"
             ;;
 
@@ -101,13 +101,13 @@ main() {
                 [[ -n "$ip" ]] || continue
 
                 $IP_CMD route \
-                    "$action" \
+                    "$ACTION" \
                     "$ip" \
                     via "$VPN_GATEWAY" \
                     2>/dev/null || true
 
                 log_debug \
-                    "Route $action: $ip"
+                    "Route $ACTION: $ip"
 
             done <<< "$ip_list"
 

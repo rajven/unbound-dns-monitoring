@@ -9,13 +9,19 @@ CONFIG_FILE="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
 insert_if_missing() {
     local after="$1"
     local line="$2"
-    local file="$3"
 
-    awk -v after="$after" -v line="$line" '
-    $0 ~ "^"line"=" {found=1}
-    {print}
-    $0 ~ "^"after"=" && !found {print line; found=1}
-    ' "$file" > "$TMP" && mv "$TMP" "$file"
+    # Проверяем, есть ли уже такая строка
+    if grep -qxF "$line" "$CONFIG_FILE"; then
+        return 0
+    fi
+
+    # Если нет - добавляем после указанной строки
+    if grep -q "^$after$" "$CONFIG_FILE"; then
+        sed -i "/^$after$/a $line" "$CONFIG_FILE"
+    else
+        # Если строки "after" нет, добавляем в конец
+        echo "$line" >> "$CONFIG_FILE"
+    fi
 }
 
 # Colors for output
@@ -49,30 +55,25 @@ mkdir -p /usr/local/lib
 mkdir -p /etc/apparmor.d/local
 
 # 3. Copy configuration
+# patch
+insert_if_missing \
+    'DIG_CMD="/usr/bin/dig"' \
+    'WGET_CMD="/usr/bin/wget"'
+
+insert_if_missing \
+    'ROUTE_YOUTUBE_IPSET="route_youtube"' \
+    'CREATE_VPN_ROUTES="yes"'
+
 log_info "Copying configuration..."
 for f in unbound-dns-monitor.cfg awg.routes; do
   cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new"
   diff -u "/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new" || true
 done
-cp -f "$SCRIPT_DIR/lib/dns-monitor-lib.sh" /usr/local/lib/
-chmod 644 /usr/local/lib/dns-monitor-lib.sh
-
-
-CFG="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
-TMP="$(mktemp)"
-
-insert_if_missing \
-    'DIG_CMD="/usr/bin/dig"' \
-    'WGET_CMD="/usr/bin/wget"' \
-    "$CFG"
-
-insert_if_missing \
-    'ROUTE_YOUTUBE_IPSET="route_youtube"' \
-    'CREATE_VPN_ROUTES="yes"' \
-    "$CFG"
 
 # 4. Copy scripts
 log_info "Copying scripts..."
+cp -f "$SCRIPT_DIR/lib/dns-monitor-lib.sh" /usr/local/lib/
+chmod 644 /usr/local/lib/dns-monitor-lib.sh
 cp -f "$SCRIPT_DIR/scripts/"*.sh /usr/local/bin/
 cp -f "$SCRIPT_DIR/scripts/unbound-dns-monitor.pl" /usr/local/bin/
 chmod +x /usr/local/bin/*.sh

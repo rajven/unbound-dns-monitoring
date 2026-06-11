@@ -1,82 +1,144 @@
 #!/bin/bash
 
-# Load common library
-SCRIPT_NAME="awg-routes"
+set -o nounset
+#set -o pipefail
+
 LIBRARY="/usr/local/lib/dns-monitor-lib.sh"
 
-if [[ ! -f "$LIBRARY" ]]; then
+[[ -r "$LIBRARY" ]] || {
     echo "ERROR: Common library not found: $LIBRARY" >&2
     exit 1
-fi
+}
 
 source "$LIBRARY"
 
-# Initialize logging
-init_logging "$SCRIPT_NAME"
+main() {
 
-# Load config
-source "$CONFIG_FILE"
+    local mode="${1:-up}"
+    local action
+    local ip
+    local ip_list
+    local user_rules="/etc/unbound-dns-monitor/awg.routes"
 
-# по умолчанию 'up', если аргумент не передан
-MODE="${1:-up}"
+    init_logging
+    init_script
 
-if [[ "$MODE" == "up" ]]; then
-    ACTION='add'
-    # Добавляем маршрут до шлюза
-    $IP_CMD route add $VPN_GATEWAY/32 dev $VPN_DEV 2>/dev/null || true
-    log_info "VPN mode UP: adding routes"
-elif [[ "$MODE" == "down" ]]; then
-    ACTION='del'
-    log_info "VPN mode DOWN: removing routes"
-else
-    log_error "Invalid mode: $MODE. Usage: $0 [up|down]"
-    exit 100
-fi
+    check_net_cmds
 
-############ For office ###################
+    require_vars \
+        VPN_GATEWAY \
+        VPN_DEV \
+        ROUTE_VPN_IPSET ||
+        error_exit "Required configuration variables missing"
 
-# dns from awg
-if $IP_CMD route get fibmatch "$VPN_DNS_UPLINK" 2>/dev/null | grep -q "via $VPN_GATEWAY dev"; then
-        log_debug "DNS route already exists (via $VPN_GATEWAY): $VPN_DNS_UPLINK"
-    else
-        $IP_CMD route add "$VPN_DNS_UPLINK" via "$VPN_GATEWAY" 2>/dev/null || true
-        log_debug "DNS route: add $VPN_DNS_UPLINK via $VPN_GATEWAY"
+    CREATE_VPN_ROUTES="${CREATE_VPN_ROUTES:-no}"
+    VPN_DNS_UPLINK="${VPN_DNS_UPLINK:-}"
+
+    ensure_ipsets \
+        "$ROUTE_VPN_IPSET" hash:net
+
+    case "$mode" in
+        up)
+            action=add
+
+            $IP_CMD route add \
+                "$VPN_GATEWAY/32" \
+                dev "$VPN_DEV" \
+                2>/dev/null || true
+
+            log_info "VPN state UP"
+            ;;
+
+        down)
+            action=del
+            log_info "VPN state DOWN"
+            ;;
+
+        *)
+            error_exit "Usage: $0 [up|down]" 100
+            ;;
+    esac
+
+    #
+    # DNS route
+    #
+
+    if [[ -n "$VPN_DNS_UPLINK" ]]; then
+
+        if ! $IP_CMD route get fibmatch "$VPN_DNS_UPLINK" \
+            2>/dev/null |
+            grep -q "via $VPN_GATEWAY dev"; then
+
+            $IP_CMD route add \
+                "$VPN_DNS_UPLINK" \
+                via "$VPN_GATEWAY" \
+                2>/dev/null || true
+
+            log_debug \
+                "DNS route: add $VPN_DNS_UPLINK"
+
+        else
+            log_debug \
+                "DNS route already exists"
+        fi
     fi
 
-# create ipset if not exists
-create_ipset_if_not_exists "$ROUTE_VPN_IPSET" "hash:net"
+    #
+    # IPSET routes
+    #
 
-# add routes by ipset route_vpn
-if $IPSET_CMD list "$ROUTE_VPN_IPSET" -n &>/dev/null; then
-    IP_LIST=$($IPSET_CMD save "$ROUTE_VPN_IPSET" 2>/dev/null | grep -E "^add $ROUTE_VPN_IPSET " | awk '{ print $3 }')
-    if [[ -n "$IP_LIST" ]]; then
-        while IFS= read -r ip; do
-            [[ -z "$ip" ]] && continue
-            $IP_CMD route $ACTION "$ip" via "$VPN_GATEWAY" 2>/dev/null || true
-            log_debug "Route $ACTION: $ip via $VPN_GATEWAY"
-        done <<< "$IP_LIST"
-    else
-        log_debug "No routes found in ipset $ROUTE_VPN_IPSET"
+    if [[ "$CREATE_VPN_ROUTES" == "yes" ]]; then
+
+        if check_ipset "$ROUTE_VPN_IPSET"; then
+
+            ip_list=$(
+                $IPSET_CMD save "$ROUTE_VPN_IPSET" |
+                awk "/^add $ROUTE_VPN_IPSET / {print \$3}"
+            )
+
+            while IFS= read -r ip; do
+
+                [[ -n "$ip" ]] || continue
+
+                $IP_CMD route \
+                    "$action" \
+                    "$ip" \
+                    via "$VPN_GATEWAY" \
+                    2>/dev/null || true
+
+                log_debug \
+                    "Route $action: $ip"
+
+            done <<< "$ip_list"
+
+        fi
     fi
-else
-    log_warn "IPSet $ROUTE_VPN_IPSET does not exist"
-fi
 
-############ The END direct routes ###################
+    #
+    # User rules
+    #
 
-# custom user routes
-USER_RULES="/etc/unbound-dns-monitor/awg.routes"
-if [ -r "$USER_RULES" ]; then
-    . "$USER_RULES"
-else
-    log_error "Файл $USER_RULES не существует или недоступен для чтения"
-fi
+    if [[ -r "$user_rules" ]]; then
+        source "$user_rules"
+    fi
 
-# Удаляем маршрут до шлюза при down
-if [[ "$MODE" == "down" ]]; then
-    $IP_CMD route del $VPN_GATEWAY/32 dev $VPN_DEV 2>/dev/null || true
-    log_info "Removed route to VPN gateway"
-fi
+    #
+    # Cleanup
+    #
 
-log_info "VPN mode $MODE completed"
+    if [[ "$mode" == down ]]; then
+
+        $IP_CMD route del \
+            "$VPN_GATEWAY/32" \
+            dev "$VPN_DEV" \
+            2>/dev/null || true
+
+        log_info "Removed route to VPN gateway"
+    fi
+
+    log_info "VPN mode $mode completed"
+}
+
+main "$@"
+
 exit 0

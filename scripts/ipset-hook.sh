@@ -1,117 +1,165 @@
 #!/bin/bash
-# Script: ipset-hook.sh
-# Description: Hook script for ipset operations
 
-# Load common library
-SCRIPT_NAME="ipset-hook"
+set -o nounset
+#set -o pipefail
+
 LIBRARY="/usr/local/lib/dns-monitor-lib.sh"
 
-if [[ ! -f "$LIBRARY" ]]; then
+[[ -r "$LIBRARY" ]] || {
     echo "ERROR: Common library not found: $LIBRARY" >&2
     exit 1
-fi
+}
 
 source "$LIBRARY"
 
-# Initialize logging
-init_logging "$SCRIPT_NAME"
+main() {
 
-# Get parameters
-IPSET_NAME=$1
-IP_ADDR=$2
-COMMENT=$3
+    local ipset_name="$1"
+    local ip_addr="$2"
+    local comment="${3:-}"
 
-# Validate parameters
-if [ -z "$IPSET_NAME" ] || [ -z "$IP_ADDR" ]; then
-    error_exit "Missing required parameters. Usage: $0 <ipset_name> <ip> [comment]"
-fi
+    local subnet24
+    local system_default
+    local cur_gate
+    local ip_comment=""
 
-# Validate IP address format
-if ! echo "$IP_ADDR" | grep -qE '^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$'; then
-    error_exit "Invalid IP address format: $IP_ADDR"
-fi
+    init_logging
+    init_script
 
-# Load configuration
-source "$CONFIG_FILE"
+    check_net_cmds
 
-create_ipset_if_not_exists "$IPSET_NAME" "hash:ip"
+    require_vars \
+        IP_CMD \
+        IPSET_CMD \
+        AWK_CMD \
+        VPN_GATEWAY \
+        ROUTE_VPN_IPSET \
+        ROUTE_YOUTUBE_IPSET \
+        YOUTUBE_DIRECT ||
+        error_exit "Required configuration variables missing"
 
-# Get system default gateway
-SYSTEM_DEFAULT=$($IP_CMD r show to 0/0 | $AWK_CMD '{ print $3 }')
-if [ -z "$SYSTEM_DEFAULT" ]; then
-    error_exit "Cannot determine system default gateway"
-fi
+    #
+    # Validate args
+    #
 
-# Calculate /24 subnet
-SUBNET24=$(echo "$IP_ADDR" | $AWK_CMD -F "." '{ print $1"."$2"."$3".0/24" }')
+    [[ -n "$ipset_name" && -n "$ip_addr" ]] ||
+        error_exit "Usage: $0 <ipset_name> <ip> [comment]"
 
-log_info "Processing: IPSET=$IPSET_NAME IP=$IP_ADDR COMMENT=$COMMENT SUBNET=$SUBNET24"
+    #
+    # Validate IP
+    #
 
-# Prepare comment for ipset
-IP_COMMENT=""
-if [ -n "$COMMENT" ]; then
-    IP_COMMENT=" comment $COMMENT"
-fi
+    [[ "$ip_addr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] ||
+        error_exit "Invalid IP address format: $ip_addr"
 
-# Handle direct routing
-if [ "x$IPSET_NAME" == "xdirect" ]; then
-    log_debug "Direct route for $IP_ADDR - no action needed"
-    exit 0
-fi
+    #
+    # Create subnet
+    #
 
-# Handle youtube routing
-if [ "x$IPSET_NAME" == "xyoutube" ]; then
-    # Проверяем, нужно ли вообще обрабатывать YouTube
-    case "$YOUTUBE_DIRECT" in
-        yes|1|on|true|TRUE|YES|ON)
-            # Включаем логику обхода через direct
-            CUR_GATE=$($IP_CMD r get fibmatch $IP_ADDR 2>/dev/null | grep -E "^default via")
-            if [ -n "$CUR_GATE" ]; then
-                log_info "Found route for $IP_ADDR via default gateway"
-                create_ipset_if_not_exists "$ROUTE_YOUTUBE_IPSET" "hash:net"
-                if $IPSET_CMD add "$ROUTE_YOUTUBE_IPSET" "$SUBNET24" -exist $IP_COMMENT 2>/dev/null; then
-                    log_info "Added $SUBNET24 to ipset $ROUTE_YOUTUBE_IPSET"
+    subnet24="$($AWK_CMD -F '.' '{print $1"."$2"."$3".0/24"}' <<< "$ip_addr")"
+
+    log_info "Processing: IPSET=$ipset_name IP=$ip_addr COMMENT=$comment SUBNET=$subnet24"
+
+    #
+    # Optional comment
+    #
+
+    [[ -n "$comment" ]] && ip_comment=" comment $comment"
+
+    #
+    # Handle direct ipset
+    #
+
+    if [[ "$ipset_name" == "direct" ]]; then
+        log_debug "Direct ipset - no action needed"
+        return 0
+    fi
+
+    #
+    # Handle YouTube special case
+    #
+
+    if [[ "$ipset_name" == "youtube" ]]; then
+
+        case "${YOUTUBE_DIRECT:-no}" in
+            yes|1|on|true|TRUE|YES|ON)
+
+                cur_gate=$($IP_CMD route get "$ip_addr" 2>/dev/null |
+                           grep -E "^default via" || true)
+
+                if [[ -n "$cur_gate" ]]; then
+
+                    log_info "YouTube bypass active for $subnet24"
+
+                    create_ipset_if_not_exists \
+                        "$ROUTE_YOUTUBE_IPSET" hash:net
+
+                    $IPSET_CMD add \
+                        "$ROUTE_YOUTUBE_IPSET" \
+                        "$subnet24" \
+                        -exist \
+                        $ip_comment \
+                        2>/dev/null &&
+
+                    log_info "Added $subnet24 to YouTube bypass ipset"
+
                 else
-                    log_warn "Failed to add $SUBNET24 to ipset $ROUTE_YOUTUBE_IPSET"
+                    log_debug "No default route for $subnet24"
                 fi
-            else
-                log_debug "Route for $SUBNET24 already exists, skipping"
-            fi
-            ;;
-        no|0|off|false|FALSE|OFF|NO)
-            log_info "YOUTUBE_DIRECT explicitly disabled, skipping YouTube routing exception"
-            ;;
-        *)
-            # Ничего не делаем
-            log_debug "YOUTUBE_DIRECT disabled, skipping YouTube routing"
-            ;;
-    esac
-    exit 0
-fi
+                ;;
 
-# Handle VPN routing (default case)
-log_info "Adding VPN route for $SUBNET24 via $VPN_GATEWAY"
+            no|0|off|false|FALSE|OFF|NO)
+                log_info "YouTube bypass disabled"
+                ;;
 
-# Check if VPN gateway is reachable
-if ! $IP_CMD route get "$VPN_GATEWAY" >/dev/null 2>&1; then
-    error_exit "VPN gateway $VPN_GATEWAY is not reachable"
-fi
+            *)
+                log_debug "YouTube bypass not enabled"
+                ;;
+        esac
 
-# Check if route already exists
-CUR_GATE=$($IP_CMD r get fibmatch "$IP_ADDR" 2>/dev/null | grep -E "via $VPN_GATEWAY dev")
-if [ -z "$CUR_GATE" ]; then
-    if $IP_CMD r add "$SUBNET24" via "$VPN_GATEWAY" 2>/dev/null; then
-        log_info "Added route $SUBNET24 via $VPN_GATEWAY"
-    else
-        error_exit "Failed to add route $SUBNET24 via $VPN_GATEWAY"
+        return 0
     fi
-    if $IPSET_CMD add "$ROUTE_VPN_IPSET" "$SUBNET24" -exist $IP_COMMENT 2>/dev/null; then
-        log_info "Added $SUBNET24 to ipset $ROUTE_VPN_IPSET"
-    else
-        log_warn "Failed to add $SUBNET24 to ipset $ROUTE_VPN_IPSET"
+
+    #
+    # Default VPN routing
+    #
+
+    log_info "Adding VPN route for $subnet24 via $VPN_GATEWAY"
+
+    system_default=$($IP_CMD route get "$VPN_GATEWAY" 2>/dev/null || true)
+
+    if [[ -z "$system_default" ]]; then
+        error_exit "VPN gateway $VPN_GATEWAY is not reachable"
     fi
-else
-    log_debug "Route for $SUBNET24 already exists, skipping"
-fi
+
+    cur_gate=$($IP_CMD route get fibmatch "$ip_addr" 2>/dev/null |
+               grep -E "via $VPN_GATEWAY" || true)
+
+    if [[ -z "$cur_gate" ]]; then
+
+        if $IP_CMD route add "$subnet24" via "$VPN_GATEWAY" 2>/dev/null; then
+            log_info "Added route $subnet24 via $VPN_GATEWAY"
+        else
+            error_exit "Failed to add route $subnet24"
+        fi
+
+        create_ipset_if_not_exists \
+            "$ROUTE_VPN_IPSET" hash:net
+
+        $IPSET_CMD add \
+            "$ROUTE_VPN_IPSET" \
+            "$subnet24" \
+            -exist \
+            $ip_comment \
+            2>/dev/null &&
+
+        log_info "Added $subnet24 to VPN ipset"
+
+    else
+        log_debug "Route already exists for $subnet24"
+    fi
+}
+
+main "$@"
 
 exit 0

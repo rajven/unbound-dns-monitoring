@@ -6,6 +6,18 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
 
+insert_if_missing() {
+    local after="$1"
+    local line="$2"
+    local file="$3"
+
+    awk -v after="$after" -v line="$line" '
+    $0 ~ "^"line"=" {found=1}
+    {print}
+    $0 ~ "^"after"=" && !found {print line; found=1}
+    ' "$file" > "$TMP" && mv "$TMP" "$file"
+}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -44,6 +56,20 @@ for f in unbound-dns-monitor.cfg awg.routes; do
 done
 cp -f "$SCRIPT_DIR/lib/dns-monitor-lib.sh" /usr/local/lib/
 chmod 644 /usr/local/lib/dns-monitor-lib.sh
+
+
+CFG="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
+TMP="$(mktemp)"
+
+insert_if_missing \
+    'DIG_CMD="/usr/bin/dig"' \
+    'WGET_CMD="/usr/bin/wget"' \
+    "$CFG"
+
+insert_if_missing \
+    'ROUTE_YOUTUBE_IPSET="route_youtube"' \
+    'CREATE_VPN_ROUTES="yes"' \
+    "$CFG"
 
 # 4. Copy scripts
 log_info "Copying scripts..."

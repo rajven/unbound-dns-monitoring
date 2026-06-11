@@ -1,49 +1,61 @@
 #!/bin/bash
-# Script: bypass_myip.sh
-# Description: Monitor domains and add IPs to direct ipset
 
-# Load common library
-SCRIPT_NAME="bypass_myip"
+set -o nounset
+#set -o pipefail
+
 LIBRARY="/usr/local/lib/dns-monitor-lib.sh"
 
-if [[ ! -f "$LIBRARY" ]]; then
+[[ -r "$LIBRARY" ]] || {
     echo "ERROR: Common library not found: $LIBRARY" >&2
     exit 1
-fi
+}
 
 source "$LIBRARY"
 
-# Initialize logging
-init_logging "$SCRIPT_NAME"
-
-# Main function
 main() {
-    log_info "Starting $SCRIPT_NAME"
 
-    # Check root
-    check_root
-
-    # Load configuration
-    if [[ ! -f "$CONFIG_FILE" ]]; then
-        error_exit "Configuration file not found: $CONFIG_FILE"
-    fi
-
-    source "$CONFIG_FILE"
-
-    # Check required ipsets
-    create_ipset_if_not_exists "$DIRECT_IPSET" "hash:ip"
-    create_ipset_if_not_exists "$RU_IPSET" "hash:net"
-
-    log_info "Processing ${#DETECT_IP_DOMAINS[@]} domains"
-
+    local domain
+    local ip
+    local ips
     local total_ips=0
     local added_ips=0
 
-    # Process domains
+    init_logging
+    init_script
+
+    check_net_cmds
+
+    require_vars \
+        DIG_CMD \
+        DNS_RESOLVER \
+        DIRECT_IPSET \
+        RU_IPSET ||
+        error_exit "Required configuration variables missing"
+
+    declare -p DETECT_IP_DOMAINS &>/dev/null ||
+        DETECT_IP_DOMAINS=()
+
+    ensure_ipsets \
+        "$DIRECT_IPSET" hash:ip \
+        "$RU_IPSET" hash:net
+
+    log_info "Starting"
+
+    log_info "Processing ${#DETECT_IP_DOMAINS[@]} domains"
+
     for domain in "${DETECT_IP_DOMAINS[@]}"; do
+
         log_debug "Resolving domain: $domain"
 
-        ips=$($DIG_CMD @"$DNS_RESOLVER" +short A "$domain" 2>/dev/null | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$')
+        ips=$(
+            $DIG_CMD \
+                @"$DNS_RESOLVER" \
+                +short \
+                +time=2 \
+                +tries=1 \
+                A "$domain" 2>/dev/null |
+            grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'
+        )
 
         if [[ -z "$ips" ]]; then
             log_warn "No IPs resolved for domain: $domain"
@@ -51,28 +63,42 @@ main() {
         fi
 
         for ip in $ips; do
+
             ((total_ips++))
 
-            # Check if IP already in RU_IPSET
-            if $IPSET_CMD test "$RU_IPSET" "$ip" 2>/dev/null; then
-                log_debug "IP $ip is in RU_IPSET, skipping"
+            if $IPSET_CMD test "$RU_IPSET" "$ip" &>/dev/null; then
+                log_debug "IP $ip already in RU_IPSET"
                 continue
             fi
 
-            # Add to DIRECT_IPSET
-            if $IPSET_CMD add "$DIRECT_IPSET" "$ip" -exist comment "$domain" 2>/dev/null; then
-                log_info "Added IP $ip (from $domain) to $DIRECT_IPSET"
+            if $IPSET_CMD add \
+                "$DIRECT_IPSET" \
+                "$ip" \
+                -exist \
+                comment \
+                "$domain" \
+                &>/dev/null; then
+
+                log_info \
+                    "Ensured IP $ip ($domain) in $DIRECT_IPSET"
+
                 ((added_ips++))
+
             else
-                log_warn "Failed to add IP $ip to $DIRECT_IPSET"
+
+                log_warn \
+                    "Cannot add IP $ip to $DIRECT_IPSET"
+
             fi
+
         done
+
     done
 
-    log_info "Completed: processed $total_ips IPs, added $added_ips new entries"
+    log_info \
+        "Completed: processed $total_ips IPs, ensured $added_ips entries"
 }
 
-# Run main function
-main
+main "$@"
 
 exit 0

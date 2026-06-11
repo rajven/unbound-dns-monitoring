@@ -1,25 +1,35 @@
 #!/bin/bash
 # Common logging library for DNS monitor scripts
 
-# Source configuration
-CONFIG_FILE="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
-if [[ -f "$CONFIG_FILE" ]]; then
-    source "$CONFIG_FILE"
-else
-    echo "ERROR: Configuration file not found: $CONFIG_FILE" >&2
-    exit 1
-fi
+init_script() {
+    check_root
+    load_config
+}
 
-# Set default log level if not defined
-LOG_LEVEL="${LOG_LEVEL:-INFO}"
-LOG_TAG_PREFIX="${LOG_TAG_PREFIX:-dns-monitor}"
+load_config() {
+
+    : "${CONFIG_FILE:=/etc/unbound-dns-monitor/unbound-dns-monitor.cfg}"
+
+    [[ -r "$CONFIG_FILE" ]] ||
+        error_exit "Configuration file not found: $CONFIG_FILE"
+
+    source "$CONFIG_FILE"
+}
 
 # Function: init_logging
 # Description: Initialize logging for a script
 init_logging() {
-    local script_name="$1"
-    export LOG_TAG="${LOG_TAG_PREFIX}-${script_name}"
-    
+
+    export SCRIPT_NAME=$(basename "$0")
+    export SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+    # Set default log level if not defined
+    export LOG_LEVEL="${LOG_LEVEL:-INFO}"
+    export LOG_TAG_PREFIX="${LOG_TAG_PREFIX:-dns-monitor}"
+
+    export LOG_TAG="${LOG_TAG_PREFIX}-${SCRIPT_NAME}"
+    export TEMP_DIR="${TEMP_DIR:=/tmp}"
+
     # Create temp directory if needed
     if [[ ! -d "$TEMP_DIR" ]]; then
         mkdir -p "$TEMP_DIR" 2>/dev/null || {
@@ -55,8 +65,16 @@ log_message() {
             ;;
     esac
 
+    local priority=info
+    case "$level" in
+	DEBUG) priority=debug ;;
+        INFO) priority=info ;;
+	WARN) priority=warning ;;
+        ERROR) priority=err ;;
+    esac
+
     # Log to syslog with tag
-    logger -t "$LOG_TAG" -p "user.$level" "$message"
+    logger -t "$LOG_TAG" -p "user.$priority" "$message"
 
     # Also output to stderr for errors and debug
     if [[ "$level" == "ERROR" ]] || [[ "$level" == "DEBUG" && "$LOG_LEVEL" == "DEBUG" ]]; then
@@ -116,4 +134,41 @@ create_ipset_if_not_exists() {
         fi
     fi
     return 0
+}
+
+require_vars() {
+    local missing=0
+    local var
+
+    for var in "$@"; do
+        if [[ -z "${!var:-}" ]]; then
+            log_error "Required variable '$var' is not set"
+            missing=1
+        fi
+    done
+
+    return $missing
+}
+
+check_net_cmds() {
+    require_vars \
+        IP_CMD \
+        IPSET_CMD ||
+        error_exit "Required network commands missing"
+}
+
+ensure_ipsets() {
+    (( $# % 2 == 0 )) || \
+        error_exit "ensure_ipsets: arguments must be pairs"
+
+    local set type
+
+    while (( $# )); do
+        set="$1"
+        type="$2"
+        shift 2
+
+        create_ipset_if_not_exists "$set" "$type" ||
+            error_exit "Cannot create ipset $set"
+    done
 }

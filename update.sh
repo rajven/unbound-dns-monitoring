@@ -9,19 +9,22 @@ CONFIG_FILE="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
 insert_if_missing() {
     local after="$1"
     local line="$2"
-
-    # Проверяем, есть ли уже такая строка
     if grep -qxF "$line" "$CONFIG_FILE"; then
         return 0
     fi
-
-    # Если нет - добавляем после указанной строки
-    if grep -q "^$after$" "$CONFIG_FILE"; then
-        sed -i "/^$after$/a $line" "$CONFIG_FILE"
-    else
-        # Если строки "after" нет, добавляем в конец
-        echo "$line" >> "$CONFIG_FILE"
-    fi
+    local tmp=$(mktemp)
+    awk -v after="$after" -v newline="$line" '
+    {
+        print
+        if ($0 == after) {
+            print newline
+            found=1
+        }
+    }
+    END {
+        if (!found) print newline
+    }
+    ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
 }
 
 # Colors for output

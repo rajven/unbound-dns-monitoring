@@ -66,14 +66,6 @@ main() {
 
     [[ -n "$comment" ]] && ip_comment=" comment $comment"
 
-    #
-    # Handle direct ipset
-    #
-
-    if [[ "$ipset_name" == "direct" ]]; then
-        log_debug "Direct ipset - no action needed"
-        return 0
-    fi
 
     #
     # Handle YouTube special case
@@ -121,43 +113,72 @@ main() {
     fi
 
     #
-    # Default VPN routing
+    # Handle direct ipset
     #
 
-    log_info "Adding VPN route for $subnet24 via $VPN_GATEWAY"
+    if [[ "$ipset_name" == "direct" ]]; then
 
-    system_default=$($IP_CMD route get "$VPN_GATEWAY" 2>/dev/null || true)
-
-    if [[ -z "$system_default" ]]; then
-        error_exit "VPN gateway $VPN_GATEWAY is not reachable"
-    fi
-
-    cur_gate=$($IP_CMD route get fibmatch "$ip_addr" 2>/dev/null |
-               grep -E "via $VPN_GATEWAY" || true)
-
-    if [[ -z "$cur_gate" ]]; then
-
-        if $IP_CMD route add "$subnet24" via "$VPN_GATEWAY" 2>/dev/null; then
-            log_info "Added route $subnet24 via $VPN_GATEWAY"
-        else
-            error_exit "Failed to add route $subnet24"
-        fi
-
+        # add to vpn ipset
         create_ipset_if_not_exists \
-            "$ROUTE_VPN_IPSET" hash:net
+            "$ipset_name" hash:net
 
         $IPSET_CMD add \
-            "$ROUTE_VPN_IPSET" \
-            "$subnet24" \
+            "$ipset_name" \
+            "$ip_addr" \
             -exist \
             $ip_comment \
             2>/dev/null &&
 
-        log_info "Added $subnet24 to VPN ipset"
+        log_info "Added $ip_addr to $ipset_name ipset. Direct ipset - no other action needed"
 
-    else
-        log_debug "Route already exists for $subnet24"
+        return 0
+
+        fi
+
+    # add to ipset
+    create_ipset_if_not_exists \
+        "$ROUTE_VPN_IPSET" hash:net
+
+    $IPSET_CMD add \
+        "$ROUTE_VPN_IPSET" \
+        "$subnet24" \
+        -exist \
+        $ip_comment \
+        2>/dev/null &&
+
+    log_info "Added $subnet24 to VPN ipset"
+
+    #
+    # Default VPN routing
+    #
+
+    if [[ "$CREATE_VPN_ROUTES" == "yes" ]]; then
+
+        log_info "Adding VPN route for $subnet24 via $VPN_GATEWAY"
+
+        system_default=$($IP_CMD route get "$VPN_GATEWAY" 2>/dev/null || true)
+
+        if [[ -z "$system_default" ]]; then
+            error_exit "VPN gateway $VPN_GATEWAY is not reachable"
+        fi
+
+        cur_gate=$($IP_CMD route get fibmatch "$ip_addr" 2>/dev/null |
+                   grep -E "via $VPN_GATEWAY" || true)
+
+        if [[ -z "$cur_gate" ]]; then
+
+            if $IP_CMD route add "$subnet24" via "$VPN_GATEWAY" 2>/dev/null; then
+                log_info "Added route $subnet24 via $VPN_GATEWAY"
+            else
+                error_exit "Failed to add route $subnet24"
+            fi
+
+        else
+            log_debug "Route already exists for $subnet24"
+        fi
+
     fi
+
 }
 
 main "$@"

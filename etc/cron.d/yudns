@@ -1,0 +1,1 @@
+#*/5  * * * * root /usr/local/bin/yudns.pl  --since "5 minutes ago" >/dev/null

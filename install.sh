@@ -47,23 +47,25 @@ chmod 644 /usr/local/lib/dns-monitor-lib.sh
 log_info "Copying scripts..."
 cp -f "$SCRIPT_DIR/scripts/"*.sh /usr/local/bin/
 cp -f "$SCRIPT_DIR/scripts/unbound-dns-monitor.pl" /usr/local/bin/
+cp -f "$SCRIPT_DIR/scripts/yudns.pl" /usr/local/bin/
 chmod +x /usr/local/bin/*.sh
 chmod +x /usr/local/bin/unbound-dns-monitor.pl
+chmod +x /usr/local/bin/yudns.pl
 
 # 5. Copy unbound configuration
 log_info "Configuring unbound..."
-rsync -av "$SCRIPT_DIR/unbound/" /etc/unbound/
+rsync -av "$SCRIPT_DIR/etc/unbound/" /etc/unbound/
 
 # 6. Copy systemd services
 log_info "Installing systemd services..."
-cp -f "$SCRIPT_DIR/systemd/unbound-dns-monitor.service" /etc/systemd/system/
+cp -f "$SCRIPT_DIR/etc/systemd/unbound-dns-monitor.service" /etc/systemd/system/
 mkdir -p /etc/systemd/system/netfilter-persistent.service.d
-cp -f "$SCRIPT_DIR/systemd/netfilter-persistent.service.d/override.conf" /etc/systemd/system/netfilter-persistent.service.d/ 2>/dev/null || true
+cp -f "$SCRIPT_DIR/etc/systemd/netfilter-persistent.service.d/override.conf" /etc/systemd/system/netfilter-persistent.service.d/ 2>/dev/null || true
 
 # 7. Configure apparmor
-if [[ -f "$SCRIPT_DIR/apparmor.d/local/usr.sbin.unbound" ]]; then
+if [[ -f "$SCRIPT_DIR/etc/apparmor.d/local/usr.sbin.unbound" ]]; then
     log_info "Configuring apparmor..."
-    cp -f "$SCRIPT_DIR/apparmor.d/local/usr.sbin.unbound" /etc/apparmor.d/local/
+    cp -f "$SCRIPT_DIR/etc/apparmor.d/local/usr.sbin.unbound" /etc/apparmor.d/local/
     apparmor_parser -r /etc/apparmor.d/usr.sbin.unbound 2>/dev/null || true
 fi
 
@@ -77,7 +79,11 @@ chmod 770 /var/log/unbound
 log_info "Generating unbound-control keys..."
 unbound-control-setup
 
-# 10. Enable services
+# 10. Setup cron
+cp -f "$SCRIPT_DIR/etc/cron.d/"* /etc/cron.d/
+chmod 644 /etc/cron.d/*
+
+# 11. Enable services
 log_info "Enabling services..."
 systemctl daemon-reload
 systemctl enable unbound

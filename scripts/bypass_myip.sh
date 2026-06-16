@@ -20,8 +20,8 @@ main() {
     local total_ips=0
     local added_ips=0
 
-    init_logging
     init_script
+    init_logging
 
     check_net_cmds
 

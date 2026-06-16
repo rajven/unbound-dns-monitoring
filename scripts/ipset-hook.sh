@@ -23,8 +23,8 @@ main() {
     local cur_gate
     local ip_comment=""
 
-    init_logging
     init_script
+    init_logging
 
     check_net_cmds
 

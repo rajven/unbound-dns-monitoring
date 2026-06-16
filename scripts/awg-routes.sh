@@ -20,8 +20,8 @@ main() {
     local ip_list
     local user_rules="/etc/unbound-dns-monitor/awg.routes"
 
-    init_logging
     init_script
+    init_logging
 
     check_net_cmds
 

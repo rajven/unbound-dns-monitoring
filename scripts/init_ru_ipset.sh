@@ -23,8 +23,8 @@ main() {
     local tmp_conf_geolite
     local entries_count
 
-    init_logging
     init_script
+    init_logging
 
     check_net_cmds
 

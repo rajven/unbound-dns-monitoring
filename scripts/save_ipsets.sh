@@ -24,8 +24,8 @@ main() {
     local processed=0
     local failed=0
 
-    init_logging
     init_script
+    init_logging
 
     check_net_cmds
 

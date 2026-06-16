@@ -108,8 +108,13 @@ chmod 770 /var/log/unbound
 systemctl daemon-reload
 
 # 10. Setup cron
-cp -f "$SCRIPT_DIR/etc/cron.d/"* /etc/cron.d/
-chmod 644 /etc/cron.d/*
+for file in "$SCRIPT_DIR"/etc/cron.d/*; do
+    filename=$(basename "$file")
+    if [ ! -f "/etc/cron.d/$filename" ]; then
+        cp -f "$file" "/etc/cron.d/"
+        chmod 644 "/etc/cron.d/$filename"
+    fi
+done
 
 log_info "Completed successfully!"
 log_info "Restart services with: systemctl restart unbound unbound-dns-monitor.service"

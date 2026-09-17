@@ -73,7 +73,7 @@ main() {
         ipdeny_file="$TEMP_DIR/ru.zone"
         tmp_conf_ipdeny="$IPSET_CONF_DIR/ipdeny_restore"
 
-        if $WGET_CMD -q "$IPDENY_URL" -O "$ipdeny_file"; then
+        if $WGET_CMD $WGET_OPTS -q "$IPDENY_URL" -O "$ipdeny_file"; then
 
             if [[ -s "$ipdeny_file" ]]; then
 
@@ -120,7 +120,7 @@ main() {
         geolite_csv="$TEMP_DIR/geolite2-country-ipv4.csv"
         tmp_conf_geolite="$IPSET_CONF_DIR/geolite_restore"
 
-        if $WGET_CMD -q "$GEOLITE_URL" -O "$geolite_csv"; then
+        if $WGET_CMD $WGET_OPTS -q "$GEOLITE_URL" -O "$geolite_csv"; then
 
             if [[ -s "$geolite_csv" ]]; then
 

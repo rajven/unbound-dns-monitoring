@@ -43,4 +43,3 @@ journalctl -u unbound-dns-monitor -f
 ## Требования
 
 Debian/Ubuntu с systemd
-```

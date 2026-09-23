@@ -73,7 +73,7 @@ main() {
         ipdeny_file="$TEMP_DIR/ru.zone"
         tmp_conf_ipdeny="$IPSET_CONF_DIR/ipdeny_restore"
 
-        if $WGET_CMD $WGET_OPTS -q "$IPDENY_URL" -O "$ipdeny_file"; then
+        if $WGET_CMD "${WGET_OPTS[@]}" -q "$IPDENY_URL" -O "$ipdeny_file"; then
 
             if [[ -s "$ipdeny_file" ]]; then
 
@@ -107,56 +107,43 @@ main() {
         log_info "IPDeny download disabled"
     fi
 
-    #
+#
     # ------------------------------------------------------------------
     # 2. Load from GeoLite2
     # ------------------------------------------------------------------
     #
 
     if [[ "$ENABLE_GEOLITE" == "yes" ]]; then
-
         log_info "Loading from GeoLite2..."
 
         geolite_csv="$TEMP_DIR/geolite2-country-ipv4.csv"
         tmp_conf_geolite="$IPSET_CONF_DIR/geolite_restore"
 
-        if $WGET_CMD $WGET_OPTS -q "$GEOLITE_URL" -O "$geolite_csv"; then
-
+        if $WGET_CMD "${WGET_OPTS[@]}" -q "$GEOLITE_URL" -O "$geolite_csv"; then
             if [[ -s "$geolite_csv" ]]; then
-
                 $AWK_CMD \
                     -F ',' \
                     -v set="$temp_set" \
-                    '$NF=="RU" {print "add " set " " $1 "-" $2}' \
+                    '{ gsub(/\r$/, "", $NF); if ($NF == "RU") print "add " set " " $1 "-" $2 }' \
                     "$geolite_csv" \
                     > "$tmp_conf_geolite"
 
                 if [[ -s "$tmp_conf_geolite" ]]; then
-
-                    if $IPSET_CMD restore \
-                        -exist \
-                        -f "$tmp_conf_geolite" \
-                        2>/dev/null
-                    then
+                    if $IPSET_CMD restore -exist -f "$tmp_conf_geolite" 2>/dev/null; then
                         log_info "GeoLite2 ranges added successfully"
                     else
                         log_warn "Failed to add GeoLite2 ranges"
                     fi
-
                 else
                     log_warn "No Russian ranges found in GeoLite2"
                 fi
-
             else
                 log_warn "Downloaded GeoLite2 file is empty"
             fi
-
             rm -f "$geolite_csv" "$tmp_conf_geolite"
-
         else
             log_warn "Failed to download GeoLite2 list"
         fi
-
     else
         log_info "GeoLite2 download disabled"
     fi
@@ -171,30 +158,23 @@ main() {
         $IPSET_CMD list "$temp_set" -t 2>/dev/null |
         $AWK_CMD '/^Number of entries:/ {print $4}'
     )
-
     entries_count="${entries_count:-0}"
 
-    log_info \
-        "Temporary ipset contains $entries_count entries"
+    log_info "Temporary ipset contains $entries_count entries"
 
-    ensure_ipsets \
-        "$RU_IPSET" hash:net
+    # 🔧 FIX: КРИТИЧЕСКАЯ ЗАЩИТА. Запрет swap, если набор пуст или содержит подозрительно мало записей.
+    # Для России нормальное количество подсетей > 5000. Если их < 1000 — значит загрузка провалилась.
+    if [[ "$entries_count" -lt 1000 ]]; then
+        error_exit "Critical: Only $entries_count entries loaded. Aborting swap to prevent routing data loss. Keeping old set intact."
+    fi
 
-    if $IPSET_CMD swap \
-        "$temp_set" \
-        "$RU_IPSET" \
-        2>/dev/null
-    then
+    ensure_ipsets "$RU_IPSET" hash:net
 
+    if $IPSET_CMD swap "$temp_set" "$RU_IPSET" 2>/dev/null; then
         log_info "Atomic swap completed"
-
-        $IPSET_CMD destroy \
-            "$temp_set" \
-            2>/dev/null || true
-
+        $IPSET_CMD destroy "$temp_set" 2>/dev/null || true
     else
-        error_exit \
-            "Atomic swap failed, keeping old set"
+        error_exit "Atomic swap failed, keeping old set"
     fi
 
     #

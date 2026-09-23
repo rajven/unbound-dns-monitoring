@@ -68,7 +68,7 @@ insert_if_missing \
     'CREATE_VPN_ROUTES="yes"'
 
 log_info "Copying configuration..."
-for f in unbound-dns-monitor.cfg awg.routes; do
+for f in unbound-dns-monitor.cfg awg.routes tun0.routes; do
   cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new"
   diff -u "/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new" || true
 done

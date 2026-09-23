@@ -40,6 +40,7 @@ mkdir -p /etc/apparmor.d/local
 log_info "Copying configuration..."
 cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/unbound-dns-monitor.cfg" /etc/unbound-dns-monitor/
 cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/awg.routes" /etc/unbound-dns-monitor/
+cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/tun0.routes" /etc/unbound-dns-monitor/
 cp -f "$SCRIPT_DIR/lib/dns-monitor-lib.sh" /usr/local/lib/
 chmod 644 /usr/local/lib/dns-monitor-lib.sh
 

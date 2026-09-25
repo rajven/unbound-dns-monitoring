@@ -1,0 +1,1 @@
+*/3  * * * * root /usr/local/bin/wg-monitor.sh wg0 awg >/dev/null

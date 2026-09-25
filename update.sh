@@ -27,6 +27,48 @@ insert_if_missing() {
     ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
 }
 
+insert_vars_after() {
+    local after="$1"
+    shift
+    local vars=("$@")
+    local tmp=$(mktemp)
+    local -a vars_to_add
+    
+    # Проверяем, какие переменные нужно добавить
+    for var in "${vars[@]}"; do
+        local key="${var%%=*}"
+        if ! grep -qE "^${key}=" "$CONFIG_FILE"; then
+            vars_to_add+=("$var")
+        fi
+    done
+    
+    # Если нечего добавлять — выходим
+    if [[ ${#vars_to_add[@]} -eq 0 ]]; then
+        rm -f "$tmp"
+        return 0
+    fi
+    
+    # Копируем файл, вставляя переменные после маркера
+    while IFS= read -r line; do
+        echo "$line" >> "$tmp"
+        if [[ "$line" == "$after" ]]; then
+            for var in "${vars_to_add[@]}"; do
+                echo "$var" >> "$tmp"
+            done
+            after=""  # Чтобы не вставлять повторно
+        fi
+    done < "$CONFIG_FILE"
+    
+    # Если маркер не найден — добавляем в конец
+    if [[ -n "$after" ]]; then
+        for var in "${vars_to_add[@]}"; do
+            echo "$var" >> "$tmp"
+        done
+    fi
+    
+    mv "$tmp" "$CONFIG_FILE"
+}
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -59,13 +101,15 @@ mkdir -p /etc/apparmor.d/local
 
 # 3. Copy configuration
 # patch
-insert_if_missing \
+insert_vars_after \
+    '# -------------------- File Paths --------------------' \
     'DIG_CMD="/usr/bin/dig"' \
     'WGET_CMD="/usr/bin/wget"'
 
-insert_if_missing \
+insert_vars_after \
+    '# -------------------- IPSet Names --------------------' \
     'ROUTE_YOUTUBE_IPSET="route_youtube"' \
-    'CREATE_VPN_ROUTES="yes"'
+    'CREATE_VPN_ROUTES="yes"' \
 
 log_info "Copying configuration..."
 for f in unbound-dns-monitor.cfg wg0.routes tun0.routes; do

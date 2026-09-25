@@ -1,16 +1,20 @@
 #!/bin/bash
 
 # Использование:
-#   wg-monitor.sh [INTERFACE] [TUNNEL_TYPE]
+#   wg-monitor.sh [INTERFACE] [TUNNEL_TYPE] [CHECK_MODE]
 #
 # По умолчанию:
 #   INTERFACE=wg0
 #   TUNNEL_TYPE=awg
+#   CHECK_MODE=all
 #
 # Примеры:
 #   wg-monitor.sh
 #   wg-monitor.sh wg1
 #   wg-monitor.sh wg1 wg
+#   wg-monitor.sh wg0 awg dns
+#   wg-monitor.sh wg1 wg rules
+#   wg-monitor.sh wg0 awg all
 #
 # Настройки берутся из /etc/unbound-dns-monitor/unbound-dns-monitor.cfg:
 #   VPN_DNS_UPLINKS[<interface>] - DNS-сервер для проверки
@@ -160,11 +164,15 @@ read_state() {
 # Функция показа справки
 show_help() {
     cat << EOF
-Usage: $0 [INTERFACE] [TUNNEL_TYPE]
+Usage: $0 [INTERFACE] [TUNNEL_TYPE] [CHECK_MODE]
 
 Parameters:
   INTERFACE    Interface name (default: wg0)
   TUNNEL_TYPE  Tunnel type: awg or wg (default: awg)
+  CHECK_MODE   Check mode: dns, rules, or all (default: all)
+               - dns:   Check only DNS server availability
+               - rules: Check only routing rules presence
+               - all:   Check both DNS and routing rules
 
 Configuration is read from:
   /etc/unbound-dns-monitor/unbound-dns-monitor.cfg
@@ -172,12 +180,15 @@ Configuration is read from:
   - ROUTE_TABLES[<interface>]    - routing table for rules check
 
 Examples:
-  $0                  # wg0, awg
-  $0 wg1              # wg1, awg
-  $0 wg1 wg           # wg1, wg
+  $0                  # wg0, awg, all
+  $0 wg1              # wg1, awg, all
+  $0 wg1 wg           # wg1, wg, all
+  $0 wg0 awg dns      # wg0, awg, check DNS only
+  $0 wg1 wg rules     # wg1, wg, check routing rules only
+  $0 wg0 awg all      # wg0, awg, check both DNS and rules
 
 Description:
-  Checks DNS server availability and routing rules presence.
+  Checks DNS server availability and/or routing rules presence.
   Restarts the VPN service if problems are detected.
 EOF
 }
@@ -186,6 +197,7 @@ EOF
 main() {
     local interface="${1:-wg0}"
     local tunnel_type="${2:-awg}"
+    local check_mode="${3:-all}"
     local service_prefix
     local service_name
     local dns_server
@@ -214,23 +226,38 @@ main() {
             ;;
     esac
 
+    # Проверяем режим проверки
+    case "$check_mode" in
+        dns|rules|all) ;;
+        *)
+            log_error "Unsupported check mode: $check_mode (supported: dns, rules, all)"
+            exit 2
+            ;;
+    esac
+
     service_name="${service_prefix}@${interface}.service"
 
-    # Получаем DNS-сервер для интерфейса из конфига
-    dns_server="${VPN_DNS_UPLINKS[$interface]:-}"
-    if [[ -z "$dns_server" ]]; then
-        log_error "No DNS server configured for interface '$interface' in VPN_DNS_UPLINKS"
-        exit 1
+    # Получаем DNS-сервер для интерфейса из конфига (если нужен)
+    dns_server=""
+    if [[ "$check_mode" == "dns" || "$check_mode" == "all" ]]; then
+        dns_server="${VPN_DNS_UPLINKS[$interface]:-}"
+        if [[ -z "$dns_server" ]]; then
+            log_error "No DNS server configured for interface '$interface' in VPN_DNS_UPLINKS"
+            exit 1
+        fi
     fi
 
-    # Получаем таблицу маршрутизации из конфига
-    table_name="${ROUTE_TABLES[$interface]:-}"
-    if [[ -z "$table_name" ]]; then
-        log_error "No routing table configured for interface '$interface' in ROUTE_TABLES"
-        exit 1
+    # Получаем таблицу маршрутизации из конфига (если нужна)
+    table_name=""
+    if [[ "$check_mode" == "rules" || "$check_mode" == "all" ]]; then
+        table_name="${ROUTE_TABLES[$interface]:-}"
+        if [[ -z "$table_name" ]]; then
+            log_error "No routing table configured for interface '$interface' in ROUTE_TABLES"
+            exit 1
+        fi
     fi
 
-    log_info "Starting check: interface=$interface, tunnel=$tunnel_type, dns=$dns_server, table=$table_name, service=$service_name"
+    log_info "Starting check: interface=$interface, tunnel=$tunnel_type, mode=$check_mode, service=$service_name"
 
     # Проверяем существование интерфейса
     if ! check_interface_exists "$interface"; then
@@ -244,20 +271,26 @@ main() {
     last_status=$(echo "$state" | cut -d'|' -f2)
     total_attempts=$((total_attempts + 1))
 
-    # Проверяем DNS-сервер
-    if check_dns "$dns_server"; then
-        dns_available=true
-        log_info "DNS server $dns_server is reachable"
-    else
-        dns_available=false
-        log_warn "DNS server $dns_server is UNREACHABLE"
+    # Проверяем DNS-сервер (если нужно)
+    dns_available=true
+    if [[ "$check_mode" == "dns" || "$check_mode" == "all" ]]; then
+        if check_dns "$dns_server"; then
+            dns_available=true
+            log_info "DNS server $dns_server is reachable"
+        else
+            dns_available=false
+            log_warn "DNS server $dns_server is UNREACHABLE"
+        fi
     fi
 
-    # Проверяем правила маршрутизации
-    if check_routing_rules "$table_name"; then
-        rules_exist=true
-    else
-        rules_exist=false
+    # Проверяем правила маршрутизации (если нужно)
+    rules_exist=true
+    if [[ "$check_mode" == "rules" || "$check_mode" == "all" ]]; then
+        if check_routing_rules "$table_name"; then
+            rules_exist=true
+        else
+            rules_exist=false
+        fi
     fi
 
     # Принимаем решение о рестарте
@@ -307,7 +340,18 @@ main() {
         save_state "$interface" "$total_attempts" "failed:$fail_count"
         exit 1
     else
-        log_info "All checks passed: DNS reachable, routing rules present"
+        # Формируем сообщение об успехе в зависимости от режима
+        case "$check_mode" in
+            dns)
+                log_info "Check passed: DNS reachable"
+                ;;
+            rules)
+                log_info "Check passed: routing rules present"
+                ;;
+            all)
+                log_info "All checks passed: DNS reachable, routing rules present"
+                ;;
+        esac
         save_state "$interface" "$total_attempts" "ok"
         exit 0
     fi

@@ -68,7 +68,7 @@ insert_if_missing \
     'CREATE_VPN_ROUTES="yes"'
 
 log_info "Copying configuration..."
-for f in unbound-dns-monitor.cfg awg.routes tun0.routes; do
+for f in unbound-dns-monitor.cfg wg0.routes tun0.routes; do
   cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new"
   diff -u "/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new" || true
 done
@@ -91,6 +91,7 @@ cp -f "$SCRIPT_DIR/etc/systemd/netfilter-persistent.service.d/override.conf" /et
 
 # 7. remove old ipset-utils
 [ -e /etc/init.d/ipset ] && rm -f /etc/init.d/ipset
+[ -e "/usr/local/bin/wg-routes.sh" ] && rm -f "/usr/local/bin/wg-routes.sh"
 
 # 8. Configure apparmor
 if [[ -f "$SCRIPT_DIR/etc/apparmor.d/local/usr.sbin.unbound" ]]; then

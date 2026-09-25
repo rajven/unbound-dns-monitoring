@@ -567,58 +567,60 @@ sub save_ipsets {
     }
 }
 
+# === READ BASH CONFIG ===
 sub read_bash_config {
     my ($file) = @_;
     my %config;
     open(my $fh, '<', $file) or die "Cannot open $file: $!";
+    
     my $in_array = 0;
     my $array_name = '';
-    my $array_content = '';
-    my $brace_depth = 0;
+    
     while (my $line = <$fh>) {
         chomp $line;
         next if $line =~ /^\s*#/;
         next if $line =~ /^\s*$/;
-        # Обработка массивов
-        if (!$in_array && $line =~ /^\s*(\S+)\s*=\s*\((.*)$/) {
+
+        # 1. Обработка начала массива
+        # Поддерживает: VAR=(, declare -A VAR=(, declare -gA VAR=(, declare -g -A VAR=(
+        if (!$in_array && $line =~ /^\s*(?:declare\s+(?:-[a-zA-Z]+\s*)+)?(\S+)\s*=\s*\((.*)$/) {
             $array_name = $1;
             $in_array = 1;
             my $rest = $2;
-            if ($rest) {
-                print "HASH $array_name :: $rest\n";
-                $rest=~s/\"//g;
-                $rest=~s/\(//g;
+
+            # Если есть содержимое на той же строке (редко, но бывает)
+            if ($rest =~ /\S/) {
+                $rest =~ s/\)\s*$//; # убираем закрывающую скобку, если она на этой же строке
                 my $item = _parse_array($rest);
-                foreach my $key (keys %$item){
-                    my %row;
-                    $row{key} = $key;
-                    $row{value} = $item->{$key};
-                    $config{$array_name}{$key}=$item->{$key};
-                    push(@{$config{$array_name.'_ARRAY'}},\%row);
-                    }
+                foreach my $key (keys %$item) {
+                    $config{$array_name}{$key} = $item->{$key};
+                    my %row = (key => $key, value => $item->{$key});
+                    push(@{$config{$array_name.'_ARRAY'}}, \%row);
                 }
-            next;
             }
+            next;
+        }
+
+        # 2. Обработка конца массива
         if ($in_array && $line =~ /^\s*\)\s*$/) {
             $array_name = '';
             $in_array = 0;
             next;
-            }
+        }
+
+        # 3. Обработка элементов внутри массива
         if ($in_array) {
-            $line=~s/\"//g;
-            $line=~s/\(//g;
             my $item = _parse_array($line);
-            foreach my $key (keys %$item){
-                my %row;
-                $row{key} = $key;
-                $row{value} = $item->{$key};
-                $config{$array_name}{$key}=$item->{$key};
-                push(@{$config{$array_name.'_ARRAY'}},\%row);
-                }
+            foreach my $key (keys %$item) {
+                $config{$array_name}{$key} = $item->{$key};
+                my %row = (key => $key, value => $item->{$key});
+                push(@{$config{$array_name.'_ARRAY'}}, \%row);
+            }
             next;
         }
-        # Обычные переменные
-        if ($line =~ /^\s*(\S+)\s*=\s*(.*?)\s*$/) {
+
+        # 4. Обычные переменные (поддерживает export VAR=)
+        if ($line =~ /^\s*(?:export\s+)?(\S+)\s*=\s*(.*?)\s*$/) {
             my $name = $1;
             my $value = $2;
             $value =~ s/^["']//;
@@ -627,19 +629,25 @@ sub read_bash_config {
         }
     }
     close($fh);
-
     return %config;
 }
 
+# === PARSE ARRAY LINE ===
 sub _parse_array {
     my ($content) = @_;
     my %result;
+
     $content =~ s/^\s+//;
     $content =~ s/\s+$//;
     $content =~ s/,$//;
-    if ($content =~ /^(.*)\s*=\s*(.*)\s*$/) {
+    $content =~ s/\"//g;
+
+    # Поддерживаем оба формата: [key]=value и key=value
+    # \[? ... \]? — опциональные квадратные скобки вокруг ключа
+    if ($content =~ /^\[?([^\]=]+)\]?\s*=\s*(.*)\s*$/) {
         $result{$1} = $2;
-        }
+    }
+
     return \%result;
 }
 

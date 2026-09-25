@@ -1,8 +1,8 @@
 # policy for OpenVpn
-#$IP_CMD route $ACTION default via $VPN_GATEWAY table awg 2>/dev/null || true
+#$IP_CMD route $ACTION default via $VPN_GATEWAY table $ROUTE_TABLE 2>/dev/null || true
 #$IP_CMD rule $ACTION from 10.254.254.1 lookup main pref 100  2>/dev/null || true
 #$IP_CMD rule $ACTION from 10.254.254.0/24 to 10.254.254.0/24 lookup main pref 101  2>/dev/null || true
 # direct nets
 #$IP_CMD rule $ACTION from 10.254.254.0/24 fwmark 100 table main pref 102 2>/dev/null || true
 # default to vpn
-#$IP_CMD rule $ACTION from 10.254.254.0/24 table awg pref 5000 2>/dev/null || true
+#$IP_CMD rule $ACTION from 10.254.254.0/24 table $ROUTE_TABLE pref 5000 2>/dev/null || true

@@ -109,7 +109,7 @@ insert_vars_after \
 insert_vars_after \
     '# -------------------- IPSet Names --------------------' \
     'ROUTE_YOUTUBE_IPSET="route_youtube"' \
-    'CREATE_VPN_ROUTES="yes"' \
+    'CREATE_VPN_ROUTES="yes"'
 
 log_info "Copying configuration..."
 for f in unbound-dns-monitor.cfg wg0.routes tun0.routes; do

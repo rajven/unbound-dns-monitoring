@@ -127,6 +127,13 @@ main() {
 
     # 10. Add system route if enabled
     if [[ "${CREATE_VPN_ROUTES:-no}" == "yes" ]]; then
+
+        # Существует ли интерфейс
+        if ! $IP_CMD link show "$target_dev" &>/dev/null; then
+            log_error "Target interface '$target_dev' does not exist or is completely removed. Cannot add VPN routes."
+            return 1
+        fi
+
         # Получаем шлюз для этого интерфейса
         if [[ -z "${VPN_DNS_UPLINKS[$target_dev]:-}" ]]; then
             log_error "No VPN_DNS_UPLINK defined for interface '$target_dev'"

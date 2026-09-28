@@ -6,27 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
 
-insert_if_missing() {
-    local after="$1"
-    local line="$2"
-    if grep -qxF "$line" "$CONFIG_FILE"; then
-        return 0
-    fi
-    local tmp=$(mktemp)
-    awk -v after="$after" -v newline="$line" '
-    {
-        print
-        if ($0 == after) {
-            print newline
-            found=1
-        }
-    }
-    END {
-        if (!found) print newline
-    }
-    ' "$CONFIG_FILE" > "$tmp" && mv "$tmp" "$CONFIG_FILE"
-}
-
+# Вставляет переменные после маркера, если их еще нет в конфиге
 insert_vars_after() {
     local after="$1"
     shift
@@ -34,7 +14,6 @@ insert_vars_after() {
     local tmp=$(mktemp)
     local -a vars_to_add
     
-    # Проверяем, какие переменные нужно добавить
     for var in "${vars[@]}"; do
         local key="${var%%=*}"
         if ! grep -qE "^${key}=" "$CONFIG_FILE"; then
@@ -42,24 +21,21 @@ insert_vars_after() {
         fi
     done
     
-    # Если нечего добавлять — выходим
     if [[ ${#vars_to_add[@]} -eq 0 ]]; then
         rm -f "$tmp"
         return 0
     fi
     
-    # Копируем файл, вставляя переменные после маркера
     while IFS= read -r line; do
         echo "$line" >> "$tmp"
         if [[ "$line" == "$after" ]]; then
             for var in "${vars_to_add[@]}"; do
                 echo "$var" >> "$tmp"
             done
-            after=""  # Чтобы не вставлять повторно
+            after=""
         fi
     done < "$CONFIG_FILE"
     
-    # Если маркер не найден — добавляем в конец
     if [[ -n "$after" ]]; then
         for var in "${vars_to_add[@]}"; do
             echo "$var" >> "$tmp"
@@ -69,7 +45,6 @@ insert_vars_after() {
     mv "$tmp" "$CONFIG_FILE"
 }
 
-# Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -79,7 +54,6 @@ log_info() { echo -e "${GREEN}[INFO]${NC} $1"; }
 log_warn() { echo -e "${YELLOW}[WARN]${NC} $1"; }
 log_error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
-# Check root
 if [[ $EUID -ne 0 ]]; then
     log_error "This script must be run as root"
 fi
@@ -98,26 +72,35 @@ mkdir -p /var/log/unbound
 mkdir -p /etc/unbound-dns-monitor
 mkdir -p /usr/local/lib
 mkdir -p /etc/apparmor.d/local
+mkdir -p /var/www/html/ipsets
 
-# 3. Copy configuration
-# patch
+# 3. Patch configuration file with new parameters
+log_info "Patching configuration file..."
+
+# Добавляем новые команды, если их нет
 insert_vars_after \
     '# -------------------- File Paths --------------------' \
     'DIG_CMD="/usr/bin/dig"' \
     'WGET_CMD="/usr/bin/wget"'
 
+# Добавляем новые флаги экспорта ПОСЛЕ главного флага ENABLE_WEB_EXPORT
+# (функция insert_vars_after сама проверит, есть ли они уже, и не добавит дубликаты)
 insert_vars_after \
-    '# -------------------- IPSet Names --------------------' \
-    'ROUTE_YOUTUBE_IPSET="route_youtube"' \
-    'CREATE_VPN_ROUTES="yes"'
+    'ENABLE_WEB_EXPORT=' \
+    'ENABLE_WEB_TXT_EXPORT="no"' \
+    'ENABLE_WEB_MIKROTIK_EXPORT="no"' \
+    'ENABLE_WEB_RU_IPSET_EXPORT="no"'
 
-log_info "Copying configuration..."
+# 4. Copy configuration templates
+log_info "Copying configuration templates..."
 for f in unbound-dns-monitor.cfg wg0.routes tun0.routes; do
-  cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new"
-  diff -u "/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new" || true
+  if [[ -f "$SCRIPT_DIR/etc/unbound-dns-monitor/$f" ]]; then
+      cp -f "$SCRIPT_DIR/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new"
+      diff -u "/etc/unbound-dns-monitor/$f" "/etc/unbound-dns-monitor/$f.new" || true
+  fi
 done
 
-# 4. Copy scripts
+# 5. Copy scripts
 log_info "Copying scripts..."
 cp -f "$SCRIPT_DIR/lib/dns-monitor-lib.sh" /usr/local/lib/
 cp -f "$SCRIPT_DIR/scripts/"*.sh /usr/local/bin/
@@ -133,7 +116,8 @@ cp -f "$SCRIPT_DIR/etc/systemd/unbound-dns-monitor.service" /etc/systemd/system/
 mkdir -p /etc/systemd/system/netfilter-persistent.service.d
 cp -f "$SCRIPT_DIR/etc/systemd/netfilter-persistent.service.d/override.conf" /etc/systemd/system/netfilter-persistent.service.d/ 2>/dev/null || true
 
-# 7. remove old ipset-utils
+# 7. Remove obsolete files
+log_info "Cleaning up obsolete files..."
 [ -e /etc/init.d/ipset ] && rm -f /etc/init.d/ipset
 [ -e "/usr/local/bin/wg-routes.sh" ] && rm -f "/usr/local/bin/wg-routes.sh"
 
@@ -153,11 +137,14 @@ chmod 770 /var/log/unbound
 systemctl daemon-reload
 
 # 10. Setup cron
+log_info "Setting up cron jobs..."
 for file in "$SCRIPT_DIR"/etc/cron.d/*; do
-    filename=$(basename "$file")
-    if [ ! -f "/etc/cron.d/$filename" ]; then
-        cp -f "$file" "/etc/cron.d/"
-        chmod 644 "/etc/cron.d/$filename"
+    if [[ -f "$file" ]]; then
+        filename=$(basename "$file")
+        if [ ! -f "/etc/cron.d/$filename" ]; then
+            cp -f "$file" "/etc/cron.d/"
+            chmod 644 "/etc/cron.d/$filename"
+        fi
     fi
 done
 

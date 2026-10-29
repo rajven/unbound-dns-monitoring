@@ -1,14 +1,14 @@
 #!/bin/bash
 
-# Использование:
+# Usage:
 #   wg-monitor.sh [INTERFACE] [TUNNEL_TYPE] [CHECK_MODE]
 #
-# По умолчанию:
+# Defaults:
 #   INTERFACE=wg0
 #   TUNNEL_TYPE=awg
 #   CHECK_MODE=all
 #
-# Примеры:
+# Examples:
 #   wg-monitor.sh
 #   wg-monitor.sh wg1
 #   wg-monitor.sh wg1 wg
@@ -16,9 +16,9 @@
 #   wg-monitor.sh wg1 wg rules
 #   wg-monitor.sh wg0 awg all
 #
-# Настройки берутся из /etc/unbound-dns-monitor/unbound-dns-monitor.cfg:
-#   VPN_DNS_UPLINKS[<interface>] - DNS-сервер для проверки
-#   ROUTE_TABLES[<interface>]    - таблица маршрутизации для проверки
+# Settings are read from /etc/unbound-dns-monitor/unbound-dns-monitor.cfg:
+#   VPN_DNS_UPLINKS[<interface>] - DNS server to check
+#   ROUTE_TABLES[<interface>]    - routing table to check
 
 set -o nounset
 set -o pipefail
@@ -32,18 +32,18 @@ LIBRARY="/usr/local/lib/dns-monitor-lib.sh"
 
 source "$LIBRARY"
 
-# Тестовый домен для проверки DNS
+# Test domain for the DNS check
 DNS_TEST_DOMAIN="one.one.one.one"
 
-# Максимальное количество неудачных попыток перед циклическим рестартом
+# Maximum number of failures before the restart cycle
 MAX_FAILURES=5
 
-# Функция проверки доступности DNS-сервера
+# Check that the DNS server is reachable
 check_dns() {
     local dns_server="$1"
     local result
 
-    # Пробуем разрешить тестовый домен через указанный DNS-сервер
+    # Try to resolve the test domain through the given DNS server
     if [[ -n "${DIG_CMD:-}" ]] && command -v "$DIG_CMD" &>/dev/null; then
         result=$("$DIG_CMD" +short +time=2 +tries=1 "@$dns_server" "$DNS_TEST_DOMAIN" A 2>/dev/null)
         if [[ -n "$result" ]]; then
@@ -52,7 +52,7 @@ check_dns() {
         fi
     fi
 
-    # Fallback на nslookup
+    # Fallback to nslookup
     if command -v nslookup &>/dev/null; then
         result=$(nslookup -timeout=2 "$DNS_TEST_DOMAIN" "$dns_server" 2>/dev/null | grep -A1 "Name:" | grep "Address")
         if [[ -n "$result" ]]; then
@@ -61,7 +61,7 @@ check_dns() {
         fi
     fi
 
-    # Fallback на host
+    # Fallback to host
     if command -v host &>/dev/null; then
         result=$(host -W 2 "$DNS_TEST_DOMAIN" "$dns_server" 2>/dev/null)
         if [[ -n "$result" && "$result" != *"not found"* && "$result" != *"NXDOMAIN"* ]]; then
@@ -70,7 +70,7 @@ check_dns() {
         fi
     fi
 
-    # Fallback на проверку доступности TCP-порта 53
+    # Fallback to a TCP port 53 check
     if (echo > "/dev/tcp/$dns_server/53") 2>/dev/null; then
         log_debug "DNS server $dns_server port 53 is open (TCP check)"
         return 0
@@ -80,7 +80,7 @@ check_dns() {
     return 1
 }
 
-# Функция проверки правил маршрутизации
+# Check the routing rules
 check_routing_rules() {
     local table_name="$1"
     local rule_count
@@ -96,7 +96,7 @@ check_routing_rules() {
     fi
 }
 
-# Функция проверки существования интерфейса
+# Check that the interface exists
 check_interface_exists() {
     local iface="$1"
     if ! $IP_CMD link show "$iface" &>/dev/null; then
@@ -105,7 +105,7 @@ check_interface_exists() {
     return 0
 }
 
-# Функция рестарта сервиса
+# Restart the service
 restart_service() {
     local service_name="$1"
     local iface="$2"
@@ -115,7 +115,7 @@ restart_service() {
     if systemctl restart "$service_name"; then
         log_info "Service $service_name restarted successfully"
 
-        # После рестарта проверяем, появились ли правила
+        # After the restart check whether the rules came back
         sleep 2
         if check_routing_rules "${ROUTE_TABLES[$iface]:-}"; then
             log_info "Routing rules in table ${ROUTE_TABLES[$iface]:-} restored"
@@ -130,7 +130,7 @@ restart_service() {
     fi
 }
 
-# Функция сохранения состояния
+# Save the state
 save_state() {
     local iface="$1"
     local attempts="$2"
@@ -143,7 +143,7 @@ save_state() {
     log_debug "State saved: interface=$iface, attempts=$attempts, status=$status"
 }
 
-# Функция чтения состояния
+# Read the state
 read_state() {
     local iface="$1"
     local state_file="/var/spool/${iface}.state"
@@ -161,7 +161,7 @@ read_state() {
     fi
 }
 
-# Функция показа справки
+# Show the help message
 show_help() {
     cat << EOF
 Usage: $0 [INTERFACE] [TUNNEL_TYPE] [CHECK_MODE]
@@ -193,7 +193,7 @@ Description:
 EOF
 }
 
-# Основная логика
+# Main logic
 main() {
     local interface="${1:-wg0}"
     local tunnel_type="${2:-awg}"
@@ -211,12 +211,12 @@ main() {
     local need_restart
     local reason
 
-    # Инициализация
+    # Initialization
     init_script
     init_logging
     check_net_cmds
 
-    # Проверяем тип туннеля
+    # Check the tunnel type
     case "$tunnel_type" in
         awg) service_prefix="awg-quick" ;;
         wg)  service_prefix="wg-quick" ;;
@@ -226,7 +226,7 @@ main() {
             ;;
     esac
 
-    # Проверяем режим проверки
+    # Check the inspection mode
     case "$check_mode" in
         dns|rules|all) ;;
         *)
@@ -237,7 +237,7 @@ main() {
 
     service_name="${service_prefix}@${interface}.service"
 
-    # Получаем DNS-сервер для интерфейса из конфига (если нужен)
+    # Get the interface DNS server from the config (if needed)
     dns_server=""
     if [[ "$check_mode" == "dns" || "$check_mode" == "all" ]]; then
         dns_server="${VPN_DNS_UPLINKS[$interface]:-}"
@@ -247,7 +247,7 @@ main() {
         fi
     fi
 
-    # Получаем таблицу маршрутизации из конфига (если нужна)
+    # Get the routing table from the config (if needed)
     table_name=""
     if [[ "$check_mode" == "rules" || "$check_mode" == "all" ]]; then
         table_name="${ROUTE_TABLES[$interface]:-}"
@@ -259,19 +259,19 @@ main() {
 
     log_info "Starting check: interface=$interface, tunnel=$tunnel_type, mode=$check_mode, service=$service_name"
 
-    # Проверяем существование интерфейса
+    # Check that the interface exists
     if ! check_interface_exists "$interface"; then
         log_error "Interface $interface does not exist"
         exit 1
     fi
 
-    # Читаем текущее состояние
+    # Read the current state
     state=$(read_state "$interface")
     total_attempts=$(echo "$state" | cut -d'|' -f1)
     last_status=$(echo "$state" | cut -d'|' -f2)
     total_attempts=$((total_attempts + 1))
 
-    # Проверяем DNS-сервер (если нужно)
+    # Check the DNS server (if needed)
     dns_available=true
     if [[ "$check_mode" == "dns" || "$check_mode" == "all" ]]; then
         if check_dns "$dns_server"; then
@@ -283,7 +283,7 @@ main() {
         fi
     fi
 
-    # Проверяем правила маршрутизации (если нужно)
+    # Check the routing rules (if needed)
     rules_exist=true
     if [[ "$check_mode" == "rules" || "$check_mode" == "all" ]]; then
         if check_routing_rules "$table_name"; then
@@ -293,7 +293,7 @@ main() {
         fi
     fi
 
-    # Принимаем решение о рестарте
+    # Decide whether to restart
     need_restart=false
     reason=""
 
@@ -310,7 +310,7 @@ main() {
     if [[ "$need_restart" = true ]]; then
         log_warn "Restart required: $reason"
 
-        # Получаем количество последовательных неудачных попыток
+        # Get the number of consecutive failures
         if [[ "$last_status" = "ok" || -z "$last_status" ]]; then
             fail_count=1
         else
@@ -324,7 +324,7 @@ main() {
         log_info "Consecutive failures: $fail_count"
 
         if [[ "$fail_count" -ge "$MAX_FAILURES" ]]; then
-            # После достижения MAX_FAILURES рестартуем каждую MAX_FAILURES-ю попытку
+            # After MAX_FAILURES is reached, restart on every MAX_FAILURES-th attempt
             if [[ $((fail_count % MAX_FAILURES)) -eq 0 ]]; then
                 log_warn "Critical state: $fail_count consecutive failures. Restarting service"
                 restart_service "$service_name" "$interface"
@@ -332,7 +332,7 @@ main() {
                 log_warn "Critical state: $fail_count consecutive failures. Restart deferred"
             fi
         else
-            # До MAX_FAILURES рестартуем при каждой ошибке
+            # Before MAX_FAILURES, restart on every failure
             log_warn "Failure #$fail_count. Restarting service"
             restart_service "$service_name" "$interface"
         fi
@@ -340,7 +340,7 @@ main() {
         save_state "$interface" "$total_attempts" "failed:$fail_count"
         exit 1
     else
-        # Формируем сообщение об успехе в зависимости от режима
+        # Build the success message depending on the mode
         case "$check_mode" in
             dns)
                 log_info "Check passed: DNS reachable"
@@ -357,7 +357,7 @@ main() {
     fi
 }
 
-# Проверка на --help
+# Handle --help
 if [[ "${1:-}" = "-h" || "${1:-}" = "--help" ]]; then
     show_help
     exit 0

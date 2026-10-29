@@ -4,19 +4,19 @@
 
 DEBUG="false"
 
-# Функция логирования в syslog
+# Logging to syslog
 log() {
-    # Фильтруем DEBUG-сообщения, если отладка не включена
+    # Filter DEBUG messages unless debugging is enabled
     if [[ "$1" == "DEBUG:"* ]] && [[ "${DEBUG}" != "true" ]]; then
         return
     fi
     logger -t "openvpn-ccd" -p local0.debug "$@"
 }
 
-# Конвертация CIDR префикса в маску подсети
+# Convert a CIDR prefix into a netmask
 cidr_to_mask() {
     local p=$1
-    # Валидация префикса
+    # Validate the prefix
     if ! [[ "$p" =~ ^[0-9]+$ ]] || [ "$p" -gt 32 ]; then
         log "ERROR: Invalid CIDR prefix: '$p'"
         return 1
@@ -36,12 +36,12 @@ ACTION="${script_type}"
 log "DEBUG: Script called. ACTION=${ACTION}, CCD=${user_ccd}, COMMON_NAME=${common_name}"
 
 if [ "${ACTION}" = "client-connect" ]; then
-    # Функция обработки одного ipset
+    # Process a single ipset
     process_ipset() {
         local set_name="$1"
         log "DEBUG: Processing ipset '${set_name}'"
 
-        # Получаем только IPv4/CIDR, игнорируем заголовки ipset
+        # Keep only IPv4/CIDR lines, ignore ipset headers
         local entries
         entries=$(sudo /etc/openvpn/server/cmd/show_ipset.sh "${set_name}" 2>/dev/null)
 

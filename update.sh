@@ -6,7 +6,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="/etc/unbound-dns-monitor/unbound-dns-monitor.cfg"
 
-# Вставляет переменные после маркера, если их еще нет в конфиге
+# Inserts variables after a marker if they are not in the config yet
 insert_vars_after() {
     local after="$1"
     shift
@@ -28,15 +28,17 @@ insert_vars_after() {
     
     while IFS= read -r line; do
         echo "$line" >> "$tmp"
-        if [[ "$line" == "$after" ]]; then
+        if [[ -n "$after" && "$line" == "$after" ]]; then
             for var in "${vars_to_add[@]}"; do
                 echo "$var" >> "$tmp"
             done
             after=""
+            inserted=1
         fi
     done < "$CONFIG_FILE"
-    
-    if [[ -n "$after" ]]; then
+
+    # Marker not found - append at the end of the file
+    if [[ "${inserted:-0}" -eq 0 ]]; then
         for var in "${vars_to_add[@]}"; do
             echo "$var" >> "$tmp"
         done
@@ -77,19 +79,29 @@ mkdir -p /var/www/html/ipsets
 # 3. Patch configuration file with new parameters
 log_info "Patching configuration file..."
 
-# Добавляем новые команды, если их нет
+# Add new commands if they are missing
 insert_vars_after \
     '# -------------------- File Paths --------------------' \
     'DIG_CMD="/usr/bin/dig"' \
     'WGET_CMD="/usr/bin/wget"'
 
-# Добавляем новые флаги экспорта ПОСЛЕ главного флага ENABLE_WEB_EXPORT
-# (функция insert_vars_after сама проверит, есть ли они уже, и не добавит дубликаты)
+# Add new export flags AFTER the main ENABLE_WEB_EXPORT flag
+# (insert_vars_after checks for existing entries and will not add duplicates)
 insert_vars_after \
     'ENABLE_WEB_EXPORT=' \
     'ENABLE_WEB_TXT_EXPORT="no"' \
     'ENABLE_WEB_MIKROTIK_EXPORT="no"' \
     'ENABLE_WEB_RU_IPSET_EXPORT="no"'
+
+# Add-mode for the VPN routing ipset
+insert_vars_after \
+    'CREATE_VPN_ROUTES="no"' \
+    'ROUTE_VPN_ADD_MODE="NET24"'
+
+# Add-mode for the YouTube bypass ipset
+insert_vars_after \
+    'ROUTE_YOUTUBE_IPSET="route_youtube"' \
+    'ROUTE_YOUTUBE_ADD_MODE="NET24"'
 
 # 4. Copy configuration templates
 log_info "Copying configuration templates..."

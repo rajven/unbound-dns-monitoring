@@ -17,7 +17,10 @@ main() {
     local ip_addr="${2:-}"
     local comment="${3:-}"
 
-    local subnet24
+    local entry
+    local add_mode
+    local youtube_mode
+    local youtube_entry
     local default_gw
     local target_dev=""
     local target_ipset=""
@@ -36,7 +39,7 @@ main() {
         YOUTUBE_DIRECT || \
         error_exit "Required configuration variables missing"
 
-    # Проверка ассоциативных массивов
+    # Check associative arrays
     if [[ ${#ROUTE_VPN_IPSETS[@]} -eq 0 ]]; then
         error_exit "ROUTE_VPN_IPSETS is empty"
     fi
@@ -47,16 +50,40 @@ main() {
         return 1
     fi
 
-    # 2. Базовая валидация IP (простая)
+    # 2. Basic IP validation (simple)
     if [[ ! "$ip_addr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
         log_error "Invalid IP address format: $ip_addr"
         return 1
     fi
 
-    # 3. Create subnet /24
-    subnet24="$($AWK_CMD -F '.' '{print $1"."$2"."$3".0/24"}' <<< "$ip_addr")"
+    # 3. Add-modes for the hash:net sets:
+    #    NET24 - the /24 network calculated from the address (default)
+    #    IP    - the address is added as is
+    #    ROUTE_VPN_ADD_MODE     - VPN routing ipset (route_vpn) and its routes
+    #    ROUTE_YOUTUBE_ADD_MODE - YouTube bypass ipset (route_youtube)
+    add_mode="$(ipset_add_mode "${ROUTE_VPN_ADD_MODE:-NET24}")" || {
+        log_error "Unknown ROUTE_VPN_ADD_MODE='${ROUTE_VPN_ADD_MODE}', falling back to NET24"
+        add_mode="NET24"
+    }
 
-    log_info "Processing: IPSET='$ipset_name' IP='$ip_addr' SUBNET='$subnet24' COMMENT='${comment:-none}'"
+    youtube_mode="$(ipset_add_mode "${ROUTE_YOUTUBE_ADD_MODE:-NET24}")" || {
+        log_error "Unknown ROUTE_YOUTUBE_ADD_MODE='${ROUTE_YOUTUBE_ADD_MODE}', falling back to NET24"
+        youtube_mode="NET24"
+    }
+
+    # Entry for the VPN routing ipset and the matching route
+    entry="$(ipset_entry_from_ip "$ip_addr" "$add_mode")" || {
+        log_error "Cannot build ipset entry for '$ip_addr' in mode '$add_mode'"
+        return 1
+    }
+
+    # Entry for the YouTube bypass ipset
+    youtube_entry="$(ipset_entry_from_ip "$ip_addr" "$youtube_mode")" || {
+        log_error "Cannot build YouTube bypass entry for '$ip_addr' in mode '$youtube_mode'"
+        return 1
+    }
+
+    log_info "Processing: IPSET='$ipset_name' IP='$ip_addr' ENTRY='$entry' MODE='$add_mode' YOUTUBE_ENTRY='$youtube_entry' YOUTUBE_MODE='$youtube_mode' COMMENT='${comment:-none}'"
 
     # 4. Format comment safely for ipset
     if [[ -n "$comment" ]]; then
@@ -71,12 +98,12 @@ main() {
         case "${YOUTUBE_DIRECT:-no}" in
             yes|1|on|true|TRUE|YES|ON)
                 if $IP_CMD route get "$ip_addr" 2>/dev/null | grep -qE "^default via"; then
-                    log_info "YouTube bypass active for $subnet24"
+                    log_info "YouTube bypass active for $youtube_entry"
                     
-                    if eval "$IPSET_CMD add '$ROUTE_YOUTUBE_IPSET' '$subnet24' -exist $ip_comment_args 2>/dev/null"; then
-                        log_info "Added $subnet24 to YouTube bypass ipset"
+                    if eval "$IPSET_CMD add '$ROUTE_YOUTUBE_IPSET' '$youtube_entry' -exist $ip_comment_args 2>/dev/null"; then
+                        log_info "Added $youtube_entry to YouTube bypass ipset (mode: $youtube_mode)"
                     else
-                        log_error "Failed to add $subnet24 to $ROUTE_YOUTUBE_IPSET"
+                        log_error "Failed to add $youtube_entry to $ROUTE_YOUTUBE_IPSET"
                     fi
                 else
                     log_debug "No default route for $ip_addr, skipping YouTube bypass"
@@ -100,18 +127,19 @@ main() {
     fi
 
     # 8. Determine target VPN interface and ipset
-    # Сначала ищем в VPN_NAMES по имени набора
+    # First look up the set name in VPN_NAMES
     if [[ -n "${VPN_NAMES[$ipset_name]:-}" ]]; then
         target_dev="${VPN_NAMES[$ipset_name]}"
         log_debug "Found target interface '$target_dev' for ipset '$ipset_name' in VPN_NAMES"
     else
-        # Если не найдено, берём первый интерфейс из ROUTE_VPN_IPSETS
+        # If not found, take the first interface from ROUTE_VPN_IPSETS
         target_dev="${!ROUTE_VPN_IPSETS[@]}"
-        target_dev="${target_dev%% *}" # Берём первый элемент
+        # Take the first element
+        target_dev="${target_dev%% *}"
         log_debug "Using default interface '$target_dev' from ROUTE_VPN_IPSETS"
     fi
 
-    # Получаем ipset для этого интерфейса
+    # Get the ipset for this interface
     target_ipset="${ROUTE_VPN_IPSETS[$target_dev]:-}"
     if [[ -z "$target_ipset" ]]; then
         log_error "No ipset found for interface '$target_dev'"
@@ -119,22 +147,22 @@ main() {
     fi
 
     # 9. Add to VPN ipset
-    if eval "$IPSET_CMD add '$target_ipset' '$subnet24' -exist $ip_comment_args 2>/dev/null"; then
-        log_info "Added $subnet24 to VPN ipset '$target_ipset' (interface: $target_dev)"
+    if eval "$IPSET_CMD add '$target_ipset' '$entry' -exist $ip_comment_args 2>/dev/null"; then
+        log_info "Added $entry to VPN ipset '$target_ipset' (interface: $target_dev, mode: $add_mode)"
     else
-        log_error "Failed to add $subnet24 to $target_ipset"
+        log_error "Failed to add $entry to $target_ipset"
     fi
 
     # 10. Add system route if enabled
     if [[ "${CREATE_VPN_ROUTES:-no}" == "yes" ]]; then
 
-        # Существует ли интерфейс
+        # Check that the interface exists
         if ! $IP_CMD link show "$target_dev" &>/dev/null; then
             log_error "Target interface '$target_dev' does not exist or is completely removed. Cannot add VPN routes."
             return 1
         fi
 
-        # Получаем шлюз для этого интерфейса
+        # Get the gateway for this interface
         if [[ -z "${VPN_DNS_UPLINKS[$target_dev]:-}" ]]; then
             log_error "No VPN_DNS_UPLINK defined for interface '$target_dev'"
             return 1
@@ -147,22 +175,22 @@ main() {
             return 1
         fi
 
-        log_info "Adding VPN route for $subnet24 via $vpn_gateway (interface: $target_dev)"
+        log_info "Adding VPN route for $entry via $vpn_gateway (interface: $target_dev)"
 
-        # Проверяем достижимость шлюза
+        # Check that the gateway is reachable
         if ! $IP_CMD route get "$vpn_gateway" &>/dev/null; then
             log_error "VPN gateway $vpn_gateway is not reachable"
             return 1
         fi
 
-        # Проверяем, существует ли уже маршрут
+        # Check whether the route already exists
         if $IP_CMD route get fibmatch "$ip_addr" 2>/dev/null | grep -qE "via $vpn_gateway"; then
-            log_debug "Route already exists for $subnet24 via $vpn_gateway"
+            log_debug "Route already exists for $entry via $vpn_gateway"
         else
-            if $IP_CMD route add "$subnet24" via "$vpn_gateway" 2>/dev/null; then
-                log_info "Successfully added route $subnet24 via $vpn_gateway"
+            if $IP_CMD route add "$entry" via "$vpn_gateway" 2>/dev/null; then
+                log_info "Successfully added route $entry via $vpn_gateway"
             else
-                log_error "Failed to add route $subnet24 via $vpn_gateway"
+                log_error "Failed to add route $entry via $vpn_gateway"
                 return 1
             fi
         fi

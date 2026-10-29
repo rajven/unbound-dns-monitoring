@@ -162,8 +162,8 @@ main() {
 
     log_info "Temporary ipset contains $entries_count entries"
 
-    # 🔧 FIX: КРИТИЧЕСКАЯ ЗАЩИТА. Запрет swap, если набор пуст или содержит подозрительно мало записей.
-    # Для России нормальное количество подсетей > 5000. Если их < 1000 — значит загрузка провалилась.
+    # FIX: critical guard. Refuse the swap when the set is empty or holds suspiciously few entries.
+    # A normal RU zone has more than 5000 subnets. Fewer than 1000 means the download failed.
     if [[ "$entries_count" -lt 1000 ]]; then
         error_exit "Critical: Only $entries_count entries loaded. Aborting swap to prevent routing data loss. Keeping old set intact."
     fi

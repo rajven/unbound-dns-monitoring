@@ -54,7 +54,7 @@ main() {
         ENABLE_WEB_RU_IPSET_EXPORT || \
         error_exit "Required configuration variables missing"
 
-    # 1. ГЛАВНЫЙ ВЫКЛЮЧАТЕЛЬ
+    # 1. MAIN SWITCH
     local enable_web="${ENABLE_WEB_EXPORT:-no}"
     [[ "$enable_web" =~ ^(yes|1|on|true|YES|ON|TRUE)$ ]] && enable_web="yes" || enable_web="no"
 
@@ -63,7 +63,7 @@ main() {
         exit 0
     fi
 
-    # 2. Нормализуем флаги конкретных форматов
+    # 2. Normalize the per-format flags
     local enable_txt="${ENABLE_WEB_TXT_EXPORT:-no}"
     local enable_mikrotik="${ENABLE_WEB_MIKROTIK_EXPORT:-no}"
     local enable_ru="${ENABLE_WEB_RU_IPSET_EXPORT:-no}"
@@ -72,13 +72,13 @@ main() {
     [[ "$enable_mikrotik" =~ ^(yes|1|on|true|YES|ON|TRUE)$ ]] && enable_mikrotik="yes" || enable_mikrotik="no"
     [[ "$enable_ru" =~ ^(yes|1|on|true|YES|ON|TRUE)$ ]] && enable_ru="yes" || enable_ru="no"
 
-    # Если главный включен, но ни один формат не выбран — предупреждаем и выходим
+    # If the main switch is on but no format is selected, warn and exit
     if [[ "$enable_txt" == "no" && "$enable_mikrotik" == "no" ]]; then
         log_warn "Web export is enabled, but no specific formats (TXT or MikroTik) are selected. Exiting."
         exit 0
     fi
 
-    # 3. Формируем список целевых ipset
+    # 3. Build the list of target ipsets
     if [[ $# -gt 0 ]]; then
         target_ipsets=("$@")
         log_info "Explicit ipsets specified: ${target_ipsets[*]}"
@@ -197,7 +197,7 @@ main() {
         fi
     done
 
-    # 5. Index file (отчёт)
+    # 5. Index file (report)
     local index_file="$WEB_OUTPUT_DIR/index.txt"
     {
         echo "# IPSets Backup Summary"
@@ -233,7 +233,7 @@ main() {
     chmod 644 "$index_file"
     log_info "Index created: $index_file"
 
-    # 6. JSON export (отчёт)
+    # 6. JSON export (report)
     local json_file="$WEB_OUTPUT_DIR/ipsets.json"
     {
         echo "{"

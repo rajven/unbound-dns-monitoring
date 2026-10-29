@@ -136,6 +136,48 @@ create_ipset_if_not_exists() {
     return 0
 }
 
+# Function: ipset_add_mode
+# Description: Normalizes the add-mode used for hash:net ipsets
+#              (route_vpn, route_youtube). Supported values:
+#                NET24 - the /24 network calculated from the IP address (default behaviour)
+#                IP    - the address is added as is
+#              Unknown value -> returns 1.
+# Usage: mode=$(ipset_add_mode "${ROUTE_VPN_ADD_MODE:-NET24}")
+ipset_add_mode() {
+    local mode="${1:-NET24}"
+
+    case "${mode^^}" in
+        NET24) echo "NET24" ;;
+        IP)    echo "IP" ;;
+        *)     return 1 ;;
+    esac
+}
+
+# Function: ipset_entry_from_ip
+# Description: Builds a hash:net ipset entry from an IPv4 address
+#              according to the selected add-mode.
+# Usage: entry=$(ipset_entry_from_ip "192.0.2.5" "NET24")  # -> 192.0.2.0/24
+#        entry=$(ipset_entry_from_ip "192.0.2.5" "IP")     # -> 192.0.2.5
+ipset_entry_from_ip() {
+    local ip="${1:-}"
+    local mode
+    local octets
+
+    [[ "$ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+
+    mode=$(ipset_add_mode "${2:-NET24}") || return 1
+
+    case "$mode" in
+        NET24)
+            octets="${ip%.*}"
+            echo "${octets}.0/24"
+            ;;
+        IP)
+            echo "$ip"
+            ;;
+    esac
+}
+
 require_vars() {
     local missing=0
     local var

@@ -15,9 +15,9 @@ source "$LIBRARY"
 main() {
 
     # $1=dev, $2=gateway $3=mode (up|down)
-    # Пример: wg0 192.168.1.1 up
+    # Example: wg0 192.168.1.1 up
 
-    # Выходим, если не переданы аргументы
+    # Exit if no arguments were passed
     if [[ -z "${1:-}" || -z "${2:-}" ]]; then
         echo "ERROR: Usage: $0 <dev> <gateway> [up|down]" >&2
         exit 1
@@ -43,7 +43,7 @@ main() {
     VPN_DNS_UPLINK="${VPN_DNS_UPLINKS[$VPN_DEV]:-}"
     ROUTE_TABLE="${ROUTE_TABLES[$VPN_DEV]:-}"
 
-    # Получаем ipset для этого интерфейса
+    # Get the ipset for this interface
     target_ipset="${ROUTE_VPN_IPSETS[$VPN_DEV]:-}"
     if [[ -z "$target_ipset" ]]; then
         log_error "No ipset found for interface '$VPN_DEV' in ROUTE_VPN_IPSETS"
@@ -80,7 +80,7 @@ main() {
     if [[ -n "$VPN_DNS_UPLINK" ]]; then
 
         if [[ "$mode" == "up" ]]; then
-            # Добавляем маршрут
+            # Add the route
             if ! ($IP_CMD route get fibmatch "$VPN_DNS_UPLINK" 2>/dev/null || true) | \
                 grep -q "via $VPN_GATEWAY dev"; then
 
@@ -97,7 +97,7 @@ main() {
                     "DNS route already exists"
             fi
         else
-            # Удаляем маршрут при down
+            # Remove the route on down
             $IP_CMD route del \
                 "$VPN_DNS_UPLINK" \
                 via "$VPN_GATEWAY" \

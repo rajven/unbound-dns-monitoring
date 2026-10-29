@@ -21,13 +21,13 @@ use Net::Patricia;
 use Net::DNS;
 use Net::IDN::Encode qw(domain_to_ascii domain_to_unicode);
 
-# конфиг
+# config
 my $CONFIG_FILE = '/etc/unbound-dns-monitor/unbound-dns-monitor.cfg';
 
-# Читаем конфиг
+# Read the config
 my %config = read_bash_config($CONFIG_FILE);
 
-# Используем переменные
+# Use the variables
 # ipset path
 my $IPSET = $config{'IPSET_CMD'} || '/usr/sbin/ipset';
 # for work youtubeUnblocker
@@ -35,13 +35,13 @@ my $youtube_direct = $config{'YOUTUBE_DIRECT'} || 0;
 # enabled hook?
 my $hook_enabled = $config{'IPSET_HOOK_ENABLED'} || 0;
 my $ipset_hook = $config{'IPSET_HOOK'} || '/usr/local/bin/ipset-hook.sh';
-# Нормализуем youtube_direct (yes/no -> 1/0)
+# Normalize youtube_direct (yes/no -> 1/0)
 if ($youtube_direct =~ /^(yes|1|on|true)$/i) {
     $youtube_direct = 1;
 } else {
     $youtube_direct = 0;
 }
-# нормализуем hook_enabled
+# Normalize hook_enabled
 if ($hook_enabled =~ /^(yes|1|on|true)$/i) {
     $hook_enabled = 1;
 } else {
@@ -316,7 +316,7 @@ sub _resolve_recursive {
         }
         elsif ($rr->type eq 'HTTPS') {
             log_debug("Processing HTTPS record for $name");
-            # Извлекаем IP из HTTPS записи
+            # Extract IPs from the HTTPS record
             my @ips = extract_ips_from_https($rr);
             foreach my $ip (@ips) {
                 if (!exists $seen_ips_ref->{$ip}) {
@@ -325,15 +325,16 @@ sub _resolve_recursive {
                     log_info("Found IPv4 hint in HTTPS: $name -> $ip");
                 }
             }
-            # Получаем target (если есть)
+            # Get the target (if present)
             my $rdata = $rr->rdata;
-            my $offset = 2;  # пропускаем priority
+            # Skip the priority field
+            my $offset = 2;
             my $target = '';
             while ($offset < length($rdata) && substr($rdata, $offset, 1) ne "\x00") {
                 $target .= substr($rdata, $offset, 1);
                 $offset++;
             }
-            # Если есть target и он не пустой и не текущий домен
+            # If there is a target and it is neither empty nor the current domain
             if ($target && $target ne '.' && $target ne '' && $target ne $name) {
                 log_info("Following HTTPS target: $name -> $target");
                 push @results, _resolve_recursive($target, 'A', $seen_ips_ref, $visited_ref);
@@ -356,21 +357,23 @@ sub extract_ips_from_https {
     my @ips;
     my $rdata = $rr->rdata;
     my $offset = 0;
-    # Читаем priority (2 байта)
+    # Read the priority (2 bytes)
     my $priority = unpack("n", substr($rdata, $offset, 2));
     $offset += 2;
-    # Читаем target (до нулевого байта)
+    # Read the target (up to the null byte)
     while ($offset < length($rdata) && substr($rdata, $offset, 1) ne "\x00") {
         $offset++;
     }
-    $offset++;  # пропускаем нулевой байт
-    # Читаем параметры
+    # Skip the null byte
+    $offset++;
+    # Read the parameters
     while ($offset + 4 <= length($rdata)) {
         my $key = unpack("n", substr($rdata, $offset, 2));
         my $len = unpack("n", substr($rdata, $offset + 2, 2));
         $offset += 4;
         last if $offset + $len > length($rdata);
-        if ($key == 4) {  # ipv4hint
+        # ipv4hint
+        if ($key == 4) {
             my $value = substr($rdata, $offset, $len);
             my @ip_ints = unpack("N*", $value);
             foreach my $ip_int (@ip_ints) {
@@ -491,7 +494,7 @@ sub log_error {
 sub init_ipsets {
     log_info("Initializing ipsets...");
 
-    # Создаём директорию для сохранения, если её нет
+    # Create the save directory if it does not exist
     if (!-d $ipset_dir) {
         eval {
             mkdir $ipset_dir or die "Cannot create $ipset_dir: $!";
@@ -506,19 +509,19 @@ sub init_ipsets {
     foreach my $set (keys %ipsets) {
         my $type = $ipsets{$set};
         my $file = "$ipset_dir/$set.conf";
-        # Проверяем, существует ли уже ipset
+        # Check whether the ipset already exists
         my $check = system("$IPSET list $set >/dev/null 2>&1");
         if ($check == 0) {
             log_info("ipset $set already exists, skipping restore/create");
             next;
         }
-        # ipset не существует, пытаемся восстановить из файла
+        # ipset does not exist, try to restore it from the file
         if (-f $file) {
             log_info("Restoring ipset $set from $file...");
             my $result = system("$IPSET restore < $file 2>/dev/null");
             if ($result != 0) {
                 log_warning("Failed to restore $set from $file, exit code: $result, will create new");
-                # Создаём новый, если восстановление не удалось
+                # Create a new one if the restore failed
                 log_info("Creating ipset $set...");
                 $result = system("$IPSET create $set $type comment 2>/dev/null");
                 if ($result != 0) {
@@ -530,7 +533,7 @@ sub init_ipsets {
                 log_debug("Successfully restored $set");
             }
         } else {
-            # Файла нет, создаём новый ipset
+            # No file, create a new ipset
             log_info("Creating ipset $set...");
             my $result = system("$IPSET create $set $type comment 2>/dev/null");
             if ($result != 0) {
@@ -581,16 +584,17 @@ sub read_bash_config {
         next if $line =~ /^\s*#/;
         next if $line =~ /^\s*$/;
 
-        # 1. Обработка начала массива
-        # Поддерживает: VAR=(, declare -A VAR=(, declare -gA VAR=(, declare -g -A VAR=(
+        # 1. Handle the beginning of an array
+        # Supports: VAR=(, declare -A VAR=(, declare -gA VAR=(, declare -g -A VAR=(
         if (!$in_array && $line =~ /^\s*(?:declare\s+(?:-[a-zA-Z]+\s*)+)?(\S+)\s*=\s*\((.*)$/) {
             $array_name = $1;
             $in_array = 1;
             my $rest = $2;
 
-            # Если есть содержимое на той же строке (редко, но бывает)
+            # If there is content on the same line (rare, but happens)
             if ($rest =~ /\S/) {
-                $rest =~ s/\)\s*$//; # убираем закрывающую скобку, если она на этой же строке
+                # Remove the closing bracket when it is on the same line
+                $rest =~ s/\)\s*$//;
                 my $item = _parse_array($rest);
                 foreach my $key (keys %$item) {
                     $config{$array_name}{$key} = $item->{$key};
@@ -601,14 +605,14 @@ sub read_bash_config {
             next;
         }
 
-        # 2. Обработка конца массива
+        # 2. Handle the end of an array
         if ($in_array && $line =~ /^\s*\)\s*$/) {
             $array_name = '';
             $in_array = 0;
             next;
         }
 
-        # 3. Обработка элементов внутри массива
+        # 3. Handle the items inside an array
         if ($in_array) {
             my $item = _parse_array($line);
             foreach my $key (keys %$item) {
@@ -619,7 +623,7 @@ sub read_bash_config {
             next;
         }
 
-        # 4. Обычные переменные (поддерживает export VAR=)
+        # 4. Plain variables (supports export VAR=)
         if ($line =~ /^\s*(?:export\s+)?(\S+)\s*=\s*(.*?)\s*$/) {
             my $name = $1;
             my $value = $2;
@@ -642,8 +646,8 @@ sub _parse_array {
     $content =~ s/,$//;
     $content =~ s/\"//g;
 
-    # Поддерживаем оба формата: [key]=value и key=value
-    # \[? ... \]? — опциональные квадратные скобки вокруг ключа
+    # Support both formats: [key]=value and key=value
+    # \[? ... \]? - optional square brackets around the key
     if ($content =~ /^\[?([^\]=]+)\]?\s*=\s*(.*)\s*$/) {
         $result{$1} = $2;
     }

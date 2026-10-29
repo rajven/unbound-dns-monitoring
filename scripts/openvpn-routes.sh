@@ -14,10 +14,10 @@ source "$LIBRARY"
 
 main() {
 
-    # $1=dev, $2=mtu, $3=link_mtu, $4=ifconfig_local, $5=netmask, $6=script_type (опционально)
-    # Пример: tun1 1500 0 192.168.201.6 255.255.255.0 up
+    # $1=dev, $2=mtu, $3=link_mtu, $4=ifconfig_local, $5=netmask, $6=script_type (optional)
+    # Example: tun1 1500 0 192.168.201.6 255.255.255.0 up
 
-    # Выходим, если не переданы обязательные аргументы
+    # Exit if required arguments are missing
     if [[ -z "${1:-}" || -z "${4:-}" ]]; then
         echo "ERROR: Usage: $0 <dev> <mtu> <link_mtu> <ifconfig_local> [netmask] [script_type]" >&2
         exit 1
@@ -39,29 +39,29 @@ main() {
     VPN_DEV="${1}"
     IFC_ADDR="${4}"
 
-    # Используем переменную окружения OpenVPN или 6-й позиционный аргумент
+    # Use the OpenVPN environment variable or the 6th positional argument
     mode="${script_type:-${6:-up}}"
 
-    # Проверка, что IP-адрес передан корректно
+    # Validate the interface IP address
     if [[ ! "${IFC_ADDR}" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-        echo "ERROR: Некорректный IP-адрес интерфейса (IFC_ADDR=${IFC_ADDR})" >&2
+        echo "ERROR: Invalid interface IP address (IFC_ADDR=${IFC_ADDR})" >&2
         exit 1
     fi
 
-    # Динамический путь к файлу дополнительных правил на основе имени интерфейса
+    # Path to the extra rules file, derived from the interface name
     user_rules="/etc/unbound-dns-monitor/${VPN_DEV}.routes"
 
-    # Шлюз VPN: из переменной окружения или вычисляем из IP интерфейса
+    # VPN gateway: from the environment variable or derived from the interface IP
     VPN_GATEWAY="${route_vpn_gateway:-${IFC_ADDR%.*}.1}"
 
-    # Системный шлюз (до VPN) — может быть полезно в user_rules
+    # System gateway (before VPN) - may be useful in user_rules
     SYSTEM_GW="${route_net_gateway:-}"
 
     CREATE_VPN_ROUTES="${CREATE_VPN_ROUTES:-no}"
     VPN_DNS_UPLINK="${VPN_DNS_UPLINKS[$VPN_DEV]:-}"
     ROUTE_TABLE="${ROUTE_TABLES[$VPN_DEV]:-}"
 
-    # Получаем ipset для этого интерфейса
+    # Get the ipset for this interface
     target_ipset="${ROUTE_VPN_IPSETS[$VPN_DEV]:-}"
     if [[ -z "$target_ipset" ]]; then
         log_error "No ipset found for interface '$VPN_DEV' in ROUTE_VPN_IPSETS"
@@ -98,7 +98,7 @@ main() {
     if [[ -n "$VPN_DNS_UPLINK" ]]; then
 
         if [[ "$mode" == "up" ]]; then
-            # Добавляем маршрут
+            # Add the route
             if ! ($IP_CMD route get fibmatch "$VPN_DNS_UPLINK" 2>/dev/null || true) | \
                 grep -q "via $VPN_GATEWAY dev"; then
 
@@ -115,7 +115,7 @@ main() {
                     "DNS route already exists"
             fi
         else
-            # Удаляем маршрут при down
+            # Remove the route on down
             $IP_CMD route del \
                 "$VPN_DNS_UPLINK" \
                 via "$VPN_GATEWAY" \

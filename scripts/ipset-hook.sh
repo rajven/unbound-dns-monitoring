@@ -22,10 +22,11 @@ main() {
     local youtube_mode
     local youtube_entry
     local default_gw
+    local default_dev=""
+    local route_dev=""
     local target_dev=""
     local target_ipset=""
     local vpn_gateway=""
-    local ip_comment_args=""
 
     init_script
     init_logging
@@ -50,11 +51,20 @@ main() {
         return 1
     fi
 
-    # 2. Basic IP validation (simple)
-    if [[ ! "$ip_addr" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    # 2. Strict IPv4 validation (4 dotted-decimal octets, each 0-255)
+    if [[ ! "$ip_addr" =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
         log_error "Invalid IP address format: $ip_addr"
         return 1
     fi
+    local -a octets=()
+    IFS='.' read -r -a octets <<< "$ip_addr"
+    local octet
+    for octet in "${octets[@]}"; do
+        if (( 10#$octet > 255 )); then
+            log_error "Invalid IP address (octet out of range): $ip_addr"
+            return 1
+        fi
+    done
 
     # 3. Add-modes for the hash:net sets:
     #    NET24 - the /24 network calculated from the address (default)
@@ -85,28 +95,38 @@ main() {
 
     log_info "Processing: IPSET='$ipset_name' IP='$ip_addr' ENTRY='$entry' MODE='$add_mode' YOUTUBE_ENTRY='$youtube_entry' YOUTUBE_MODE='$youtube_mode' COMMENT='${comment:-none}'"
 
-    # 4. Format comment safely for ipset
-    if [[ -n "$comment" ]]; then
-        ip_comment_args="comment \"$comment\""
+    # 4. Validate comment before passing it to ipset: it originates from DNS
+    #    log data, so restrict it to a fixed safe charset and pass it only as
+    #    a single quoted argument (never reassembled into a shell line)
+    if [[ -n "$comment" ]] && [[ ! "$comment" =~ ^[A-Za-z0-9._-]{1,255}$ ]]; then
+        log_warn "Comment contains characters outside [A-Za-z0-9._-] (or too long), dropping it"
+        comment=""
     fi
 
-    # 5. Detect default gateway
+    # 5. Detect default gateway and the WAN device that owns it
     default_gw="$($IP_CMD route show to 0/0 | awk '/via/ { print $3; exit }')"
+    default_dev="$($IP_CMD route show to default | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i+1); exit } }')"
 
     # 6. Handle YouTube special case
     if [[ "$ipset_name" == "youtube" ]]; then
         case "${YOUTUBE_DIRECT:-no}" in
             yes|1|on|true|TRUE|YES|ON)
-                if $IP_CMD route get "$ip_addr" 2>/dev/null | grep -qE "^default via"; then
-                    log_info "YouTube bypass active for $youtube_entry"
-                    
-                    if eval "$IPSET_CMD add '$ROUTE_YOUTUBE_IPSET' '$youtube_entry' -exist $ip_comment_args 2>/dev/null"; then
+                # The address is bypassed only when its current route exits
+                # via the WAN device: ip route get never prints "default via"
+                # (output starts with the target address), so comparing the
+                # exit device with the default-route device is the reliable
+                # equivalent of the intended check
+                route_dev="$($IP_CMD route get "$ip_addr" 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "dev") { print $(i+1); exit } }')"
+                if [[ -n "$default_dev" && "$route_dev" == "$default_dev" ]]; then
+                    log_info "Route for $ip_addr exits via WAN device '$route_dev', YouTube bypass active for $youtube_entry"
+
+                    if $IPSET_CMD add "$ROUTE_YOUTUBE_IPSET" "$youtube_entry" -exist ${comment:+comment "$comment"} 2>/dev/null; then
                         log_info "Added $youtube_entry to YouTube bypass ipset (mode: $youtube_mode)"
                     else
                         log_error "Failed to add $youtube_entry to $ROUTE_YOUTUBE_IPSET"
                     fi
                 else
-                    log_debug "No default route for $ip_addr, skipping YouTube bypass"
+                    log_debug "Route for $ip_addr exits via '${route_dev:-none}', not via WAN device '${default_dev:-none}', skipping YouTube bypass"
                 fi
                 ;;
             *)
@@ -118,7 +138,7 @@ main() {
 
     # 7. Handle direct ipset
     if [[ "$ipset_name" == "direct" ]]; then
-        if eval "$IPSET_CMD add 'direct' '$ip_addr' -exist $ip_comment_args 2>/dev/null"; then
+        if $IPSET_CMD add "direct" "$ip_addr" -exist ${comment:+comment "$comment"} 2>/dev/null; then
             log_info "Added $ip_addr to direct ipset. Direct ipset - no other action needed"
         else
             log_error "Failed to add $ip_addr to direct ipset"
@@ -147,7 +167,7 @@ main() {
     fi
 
     # 9. Add to VPN ipset
-    if eval "$IPSET_CMD add '$target_ipset' '$entry' -exist $ip_comment_args 2>/dev/null"; then
+    if $IPSET_CMD add "$target_ipset" "$entry" -exist ${comment:+comment "$comment"} 2>/dev/null; then
         log_info "Added $entry to VPN ipset '$target_ipset' (interface: $target_dev, mode: $add_mode)"
     else
         log_error "Failed to add $entry to $target_ipset"

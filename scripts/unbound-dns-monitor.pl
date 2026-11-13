@@ -159,6 +159,15 @@ $SIG{TERM} = sub {
 # Time to suppress duplicate events
 my $mute_time = 3600;
 
+# In-memory caches grow with every query/IP seen (see prune_caches), so they
+# are pruned periodically. The pruning interval equals mute_time: by then all
+# mute entries are expired anyway, so dropping them does not change behavior.
+my $prune_interval = $mute_time;
+my $last_prune_time = time();
+
+# Timestamps of IPs registered in $dns_cache (needed to prune old entries)
+my %dns_cache_added_at;
+
 # Log file path
 my $log_file = '/var/log/unbound/unbound.log';
 
@@ -206,6 +215,12 @@ while (1) {
         while (my $logline = $unbound_log->read) {
             next unless $logline;
             chomp($logline);
+
+            # Periodic cleanup to keep the caches bounded
+            if (time() - $last_prune_time >= $prune_interval) {
+                prune_caches();
+                $last_prune_time = time();
+            }
 
             log_info("Processing log line: $logline");
 
@@ -405,6 +420,7 @@ sub add_ip_to_ipset {
 
     # Add to Patricia cache
     $dns_cache->add_string($ip);
+    $dns_cache_added_at{$ip} = time();
 
     # For direct action: skip if IP belongs to RU_IPS
     if ($action eq 'direct') {
@@ -428,43 +444,108 @@ sub add_ip_to_ipset {
         return;
     }
 
-    # Prepare comment
+    # Prepare comment (whitelist-sanitized, may become empty)
     my $comment = prepare_comment($domain);
 
-    # Execute ipset command
-    my $cmd = sprintf(
-        '%s add %s %s -exist comment "%s" 2>/dev/null',
-        $IPSET,
-        $set_name,
-        $ip,
-        $comment
-    );
+    # Execute ipset command in list form: the comment originates from DNS
+    # log data, so it must never be reassembled into a shell command line
+    my @ipset_cmd = ($IPSET, 'add', $set_name, $ip, '-exist');
+    push @ipset_cmd, 'comment', $comment if length $comment;
 
-    my $result = system($cmd);
-    log_debug("IPSET run: $cmd");
+    my $result = system(@ipset_cmd);
+    log_debug("IPSET run: @ipset_cmd");
     if ($result == 0) {
         $ipset_added{$ip} = $set_name;
         log_info("Added $ip to $set_name (comment: $comment)");
         $ipsets_data{$action}->add_string($ip,$comment);
         if ($hook_enabled && -e $ipset_hook) {
-            $cmd = "$ipset_hook $set_name $ip $comment >/dev/null 2>&1 &";
-            log_debug("Hook run: $cmd");
-            system($cmd);
-            }
+            log_debug("Hook run: $ipset_hook $set_name $ip $comment");
+            run_hook_async($ipset_hook, $set_name, $ip, $comment);
+        }
     }
     else {
         log_error("Failed to add $ip to ipset, exit code: $result");
         $dns_cache->remove_string($ip);
+        delete $dns_cache_added_at{$ip};
     }
 }
 
-# Clean template for ipset comment
+# Spawn the hook without a shell and without leaving zombies: fork an
+# intermediate child that exits right away (reaped below), while the
+# grandchild detaches, redirects its output and exec()s the hook with an
+# argument list. The targeted waitpid() never interferes with system().
+sub run_hook_async {
+    my ($hook, @hook_args) = @_;
+
+    my $child = fork();
+    if (!defined $child) {
+        log_warning("Cannot fork for hook: $!");
+        return;
+    }
+    if ($child == 0) {
+        my $grandchild = fork();
+        if (!defined $grandchild) {
+            POSIX::_exit(1);
+        }
+        if ($grandchild == 0) {
+            # Do not keep the single-instance lock in the detached process
+            close(SELF);
+            open(STDOUT, '>', '/dev/null');
+            open(STDERR, '>', '/dev/null');
+            exec($hook, @hook_args) or POSIX::_exit(1);
+        }
+        POSIX::_exit(0);
+    }
+    # Parent: wait only for the intermediate child (it exits immediately);
+    # the grandchild is re-parented to init and reaped there
+    waitpid($child, 0);
+}
+
+# Periodic cleanup of in-memory caches. Without it they grow without bound
+# on a busy resolver: %processed_domains records every A/HTTPS query,
+# $dns_cache and %ipset_added record every added IP, and the daemon
+# eventually hits its systemd MemoryMax. Entries older than $mute_time are
+# expired anyway, and re-processing them is idempotent: a re-appearing
+# domain is simply re-resolved, and the Patricia mirror of the live ipset
+# still reports known IPs, so nothing is added twice.
+sub prune_caches {
+    my $now = time();
+
+    my $domains_before = scalar keys %processed_domains;
+    foreach my $domain (keys %processed_domains) {
+        foreach my $q_type (keys %{ $processed_domains{$domain} }) {
+            if ($now - $processed_domains{$domain}{$q_type} >= $mute_time) {
+                delete $processed_domains{$domain}{$q_type};
+            }
+        }
+        delete $processed_domains{$domain}
+            unless %{ $processed_domains{$domain} };
+    }
+
+    my $ips_before = scalar keys %dns_cache_added_at;
+    foreach my $ip (keys %dns_cache_added_at) {
+        next unless $now - $dns_cache_added_at{$ip} >= $mute_time;
+        delete $dns_cache_added_at{$ip};
+        delete $ipset_added{$ip};
+        $dns_cache->remove_string($ip);
+    }
+
+    log_info(sprintf(
+        'Cache pruning: domains %d -> %d, tracked IPs %d -> %d',
+        $domains_before, scalar(keys %processed_domains),
+        $ips_before, scalar(keys %dns_cache_added_at),
+    ));
+}
+
+# Build a safe ipset comment from the domain in the DNS log: keep only a
+# fixed whitelist of characters and cap the length (ipset limit is 255).
+# The comment travels into ipset/hook arguments, so instead of trying to
+# escape shell metacharacters, everything outside [A-Za-z0-9._-] is dropped.
 sub prepare_comment {
     my ($template) = @_;
     my $original = $template;
-    $template =~ s/[\^\$]//g;
-    $template =~ s/\\\.//g;
-    $template =~ s/[\\\[\]\(\)\{\}\*\+\?\|]//g;
+    $template =~ s/[^A-Za-z0-9._-]//g;
+    $template = substr($template, 0, 255);
     log_debug("Comment prepared: '$original' -> '$template'");
     return $template;
 }
